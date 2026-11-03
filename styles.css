@@ -436,3 +436,9 @@ details.ocr .notes { margin-top: 12px; font-size: .9rem; color: var(--muted); }
 .job.skip { opacity: .6; }
 .sync-line { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: .85rem; color: var(--muted); padding: 0 4px; }
 #invite-text { font-size: .85rem; }
+.page-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; background: var(--surface); border-top: 1px solid var(--line); font-size: .85rem; }
+.page-tools b { margin-right: auto; }
+.mini-btn { border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; padding: 5px 11px; font-size: .82rem; }
+.mini-btn.danger { color: #c0392b; }
+.linkbtn { border: 0; background: none; padding: 0; color: var(--accent); font-weight: 600; text-decoration: underline; font-size: inherit; }
+button.rec-card.pick { border: 0; padding: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; }

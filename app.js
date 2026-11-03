@@ -182,9 +182,9 @@ const ANIMAL = { milch: 1, sahne: 1, butter: 1, kase: 1, quark: 1, joghurt: 1, '
 
 const RULES = {
   kuchen: {
-    kw: { kuchen: 5, brownie: 5, cheesecake: 6, 'torte$': 5, '=torten': 5, springform: 4, tortenboden: 4, biskuit: 3, gugelhupf: 5, napfkuchen: 5, kastenform: 3, muffin: 5, cupcake: 5, '^tarte': 4, streusel: 2, tortenguss: 4, zuckerguss: 2, kuvertur: 1, backblech: 1 },
+    kw: { kuchen: 5, brownie: 5, cheesecake: 6, bienenstich: 6, donauwelle: 6, 'torte$': 5, '=torten': 5, springform: 4, tortenboden: 4, biskuit: 3, gugelhupf: 5, napfkuchen: 5, kastenform: 3, muffin: 5, cupcake: 5, '^tarte': 4, streusel: 2, tortenguss: 4, zuckerguss: 2, kuvertur: 1, backblech: 1 },
     subs: {
-      blechkuchen: { blechkuchen: 6, '^blech': 4, backblech: 3, fettpfanne: 3, 'vom blech': 4, 'auf dem blech': 4, tassenkuchen: 5, brownie: 3, 'frau holle': 6, 'donauwelle': 6, 'bienenstich': 3, 'butterkuchen': 6, 'zuckerkuchen': 6, 'streuselkuchen': 4 },
+      blechkuchen: { blechkuchen: 6, '^blech': 4, backblech: 3, fettpfanne: 3, 'vom blech': 4, 'auf dem blech': 4, tassenkuchen: 5, brownie: 3, 'frau holle': 6, 'donauwelle': 6, 'bienenstich': 6, 'butterkuchen': 6, 'zuckerkuchen': 6, 'streuselkuchen': 4 },
       torten: { 'torte$': 5, '=torten': 5, sahnetorte: 6, tortenring: 4, tortenboden: 3, biskuit: 4, 'steif schlagen': 3, 'steif geschlagen': 3, buttercreme: 4, fullung: 2, '^schicht': 2, waagerecht: 3, 'boden halbieren': 4, 'einmal durchschneiden': 4, sahnesteif: 3 },
       ruhrkuchen: {
         ruhrkuchen: 6, ruhrteig: 5, gugelhupf: 5, napfkuchen: 5, kastenform: 3, marmorkuchen: 6, kastenkuchen: 5,
@@ -283,7 +283,7 @@ const RULES = {
   },
 };
 
-const CLASSIFIER_VERSION = 4; // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
+const CLASSIFIER_VERSION = 5; // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
 const kwCache = new Map();
 function kwRegex(k) {
   if (!kwCache.has(k)) {
@@ -893,27 +893,28 @@ function renderQueue() {
       <div class="job-ico">${j.state === 'done' ? '✅' : j.state === 'error' ? '⚠️' : j.state === 'skip' ? '⚪️' : '<span class="spin"></span>'}</div>
       <div class="job-main">
         <div class="job-title">${r ? `<a href="#/r/${encodeURIComponent(r.id)}">${esc(r.title)}</a>` : esc(j.label)}</div>
-        <div class="job-sub">${j.state === 'done' ? where : esc(j.status)}</div>
+        <div class="job-sub">${j.state === 'done' ? (j.merged ? `➕ Als Seite ${j.pageNo} zu diesem Rezept hinzugefügt${j.auto ? ` · <button class="linkbtn" data-action="split-job" data-id="${esc(j.id)}">Doch eigenes Rezept</button>` : ''}` : where) : esc(j.status)}</div>
         ${j.state === 'work' ? `<div class="bar"><div style="width:${j.pct}%"></div></div>` : ''}
       </div>
     </div>`;
   }).join('');
 }
-async function enqueue(files, combine) {
-  const job = { id: uid(), label: files.length > 1 ? `${files.length} Dateien` : files[0].name, state: 'work', status: 'Wird vorbereitet…', pct: 0 };
+async function enqueue(files, combine, { into = null } = {}) {
+  const batch = uid();
+  const job = { id: uid(), batch, into, auto: !combine && !into, label: files.length > 1 ? `${files.length} Dateien` : files[0].name, state: 'work', status: 'Wird vorbereitet…', pct: 0 };
   queue.push(job);
   renderQueue();
   try {
     const pages = await filesToPages(files, (s) => { job.status = s; renderQueue(); });
     // Ein Rezept pro Seite – oder alle zusammen
-    const groups = combine ? [pages] : pages.map((p) => [p]);
+    const groups = combine || into ? [pages] : pages.map((p) => [p]);
     if (groups.length > 1) {
       queue.splice(queue.indexOf(job), 1);
       const perFile = {};
       queue.push(...groups.map((g) => {
         const n = (perFile[g[0].name] = (perFile[g[0].name] || 0) + 1);
         const multi = pages.filter((p) => p.name === g[0].name).length > 1;
-        return { id: uid(), label: g[0].name + (multi ? ` – Seite ${n}` : ''), state: 'wait', status: 'Wartet…', pct: 0, group: g };
+        return { id: uid(), batch, auto: true, label: g[0].name + (multi ? ` – Seite ${n}` : ''), state: 'wait', status: 'Wartet…', pct: 0, group: g };
       }));
     } else {
       job.group = groups[0];
@@ -945,7 +946,7 @@ async function processQueue() {
       job.group = null;
       renderQueue();
       const h = location.hash;
-      if (h === '' || h === '#/' || h.startsWith('#/k/')) { render.keepScroll = true; render(); }
+      if (h === '' || h === '#/' || h.startsWith('#/k/') || (job.recipeId && h === '#/r/' + encodeURIComponent(job.recipeId))) { render.keepScroll = true; render(); }
     }
   } finally {
     queueBusy = false;
@@ -983,13 +984,84 @@ async function processGroup(job) {
   job.status = 'Wird einsortiert…';
   renderQueue();
   const text = texts.join('\n\n').trim();
+  const blobs = [];
+  for (const p of job.group) blobs.push(await canvasToBlob(scaleCanvas(p.canvas, 1800), 0.82));
+  // Seite(n) zu einem bestehenden Rezept hinzufügen – gewünscht oder als erkannte Fortsetzung
+  let target = job.into ? recById(job.into) : null;
+  if (!target && job.auto) {
+    const prev = queue.slice(0, queue.indexOf(job)).reverse().find((j) => j.batch === job.batch && j.recipeId && j.state === 'done');
+    const pr = prev && recById(prev.recipeId);
+    if (pr && isContinuation(text, pr)) target = pr;
+  }
+  if (target) {
+    await appendPages(target, blobs, texts);
+    job.recipeId = target.id;
+    job.merged = true;
+    job.pageNo = target.pages.length;
+    return;
+  }
   const { title, cats, subs } = titleAndCats(allLines, text, fileTitle(job.group[0].name));
-  const pages = [];
-  for (const p of job.group) pages.push(await canvasToBlob(scaleCanvas(p.canvas, 1800), 0.82));
   const thumb = await canvasToBlob(scaleCanvas(job.group[0].canvas, 480), 0.75);
-  const r = { id: uid(), title, cats, subs, text, pages, thumb, created: Date.now(), fav: false, scanned: true, imgv: Date.now() };
+  const r = { id: uid(), title, cats, subs, text, pages: blobs, pageTexts: texts, thumb, created: Date.now(), fav: false, scanned: true, imgv: Date.now() };
   await saveRecipe(r);
   job.recipeId = r.id;
+}
+
+/* ---------- Mehrseitige Rezepte ---------- */
+// Hat die Seite eine Zutatenliste? (Wort „Zutaten“ oder mehrere Zeilen mit Mengenangaben)
+function hasIngredientList(t) {
+  if (/\bzutaten\b/.test(norm(t))) return true;
+  const qty = /^\s*[-•*»+·]?\s*(\d+([.,/]\d+)?|½|¼|¾|eine?n?|etwas)\s*(g|kg|ml|l|el|tl|msp|prise|pck|päckchen|packung|becher|tasse|tassen|stück|stk|dose|bund|zehe|zehen|liter|gramm|glas)\b/i;
+  return String(t).split(/\n/).filter((l) => qty.test(l)).length >= 3;
+}
+// Ist diese Seite die Fortsetzung des vorherigen Rezepts?
+function isContinuation(text, prev) {
+  if ((prev.pages || []).length >= 6) return false;
+  const n = norm(text);
+  if (/fortsetzung|\bforts\b|\bseite 2\b|weiter von seite|von der vorderseite|ruckseite/.test(n)) return true;
+  if ((text.match(/\p{L}/gu) || []).length < 60) return true; // kaum Text – meist ein Foto vom fertigen Gericht
+  return !hasIngredientList(text) && hasIngredientList(recipeText(prev));
+}
+function refreshAfterPageChange(r) {
+  r.text = (r.pageTexts && r.pageTexts.length === r.pages.length) ? r.pageTexts.join('\n\n').trim() : r.text;
+  if (!r.manualCats) Object.assign(r, classify(recipeText(r), r.title));
+  r.imgv = Date.now();
+  dropUrls(r.id);
+}
+async function appendPages(r, blobs, texts) {
+  if (!r.pageTexts || r.pageTexts.length !== r.pages.length) r.pageTexts = r.pages.map((_, i) => (i === 0 ? r.text || '' : ''));
+  r.pages = [...r.pages, ...blobs];
+  r.pageTexts = [...r.pageTexts, ...texts];
+  r.text = [r.text, ...texts].filter(Boolean).join('\n\n').trim();
+  if (!r.manualCats) Object.assign(r, classify(r.text, r.title));
+  r.imgv = Date.now();
+  dropUrls(r.id);
+  await saveRecipe(r);
+}
+// Seite i als eigenes Rezept abtrennen
+async function splitPage(r, i) {
+  const blob = r.pages[i];
+  let pageText = r.pageTexts && r.pageTexts.length === r.pages.length ? r.pageTexts[i] : '';
+  r.pages = r.pages.filter((_, k) => k !== i);
+  if (r.pageTexts && r.pageTexts.length === r.pages.length + 1) r.pageTexts = r.pageTexts.filter((_, k) => k !== i);
+  if (i === 0) r.thumb = await canvasToBlob(scaleCanvas(await imageToCanvas(r.pages[0], 1200), 480), 0.75);
+  refreshAfterPageChange(r);
+  await saveRecipe(r);
+  const c = await imageToCanvas(blob, 2200);
+  let lines = [];
+  if (!pageText) { const res = await ocrCanvas(c, () => {}); pageText = res.text; lines = res.lines; }
+  const t = titleAndCats(lines, pageText, null);
+  const n = { id: uid(), title: t.title, cats: t.cats, subs: t.subs, text: pageText, pages: [blob], pageTexts: [pageText], thumb: await canvasToBlob(scaleCanvas(c, 480), 0.75), created: Date.now(), fav: false, scanned: true, imgv: Date.now() };
+  await saveRecipe(n);
+  return n;
+}
+// Zwei Rezepte zusammenführen: die Seiten von „other“ kommen hinten an „r“ dran
+async function mergeRecipes(r, other) {
+  const texts = other.pageTexts && other.pageTexts.length === (other.pages || []).length ? other.pageTexts : (other.pages || []).map((_, i) => (i === 0 ? recipeText(other) : ''));
+  if (other.fav) r.fav = true;
+  if (other.tags) r.tags = [r.tags, other.tags].filter(Boolean).join(', ');
+  await appendPages(r, other.pages || [], texts);
+  await deleteRecipe(other.id);
 }
 
 // Bestehendes Rezept mit der aktuellen Texterkennung neu lesen (Bilder bleiben gleich)
@@ -1286,17 +1358,45 @@ function viewRecipe(id) {
       <p class="muted" style="font-size:.85rem;margin:8px 0 0">Eingescannt am ${fmtDate(r.created || Date.now())}${r.manualCats ? '' : ' · automatisch einsortiert'} ·
         <a href="#/bearbeiten/${encodeURIComponent(r.id)}" style="color:var(--accent)">ändern</a></p>
     </div>
-    ${pages.map((_, i) => `<figure class="scan-page"><img src="${pageUrl(r, i)}" alt="${esc(r.title)} – Seite ${i + 1}" data-action="zoom"></figure>`).join('')}
+    ${pages.length > 1 ? `<p class="muted" style="margin:14px 0 0">📑 ${pages.length} Seiten</p>` : ''}
+    ${pages.map((_, i) => `<figure class="scan-page"><img src="${pageUrl(r, i)}" alt="${esc(r.title)} – Seite ${i + 1}" data-action="zoom">
+      ${pages.length > 1 ? `<figcaption class="page-tools"><b>Seite ${i + 1}</b>
+        ${i > 0 ? `<button class="mini-btn" data-action="page-up" data-id="${esc(r.id)}" data-i="${i}">↑ nach vorne</button>` : ''}
+        <button class="mini-btn" data-action="page-rotate" data-id="${esc(r.id)}" data-i="${i}">↻ drehen</button>
+        <button class="mini-btn" data-action="page-split" data-id="${esc(r.id)}" data-i="${i}">✂️ eigenes Rezept</button>
+        <button class="mini-btn danger" data-action="page-del" data-id="${esc(r.id)}" data-i="${i}">🗑️</button></figcaption>` : ''}
+    </figure>`).join('')}
     ${!pages.length && r.image ? `<figure class="scan-page"><img src="${r.image}" alt="" data-action="zoom"></figure>` : ''}
     ${oldText ? `<section class="card"><p class="notes">${esc(oldText)}</p></section>` : ''}
     ${pages.length ? '<p class="muted center" style="font-size:.85rem">Tippe auf das Bild zum Vergrößern.</p>' : ''}
     ${r.text ? `<details class="card ocr"><summary>🔤 Erkannter Text <span class="muted">(für die Suche)</span></summary><p class="notes">${esc(r.text)}</p></details>` : ''}
     <div class="rec-actions">
-      ${pages.length ? `<button class="btn" data-action="rotate" data-id="${esc(r.id)}">↻ Drehen</button>
+      ${pages.length ? `<label class="btn">📷 Seite hinzufügen<input type="file" accept="image/*,application/pdf,.pdf" multiple data-action="add-pages" data-id="${esc(r.id)}" hidden></label>
+        <a class="btn" href="#/zusammen/${encodeURIComponent(r.id)}">🔗 Mit anderem Rezept zusammenführen</a>
+        ${pages.length === 1 ? `<button class="btn" data-action="rotate" data-id="${esc(r.id)}">↻ Drehen</button>` : ''}
         <button class="btn" data-action="reread" data-id="${esc(r.id)}">🔤 Neu lesen</button>` : ''}
       <a class="btn" href="#/bearbeiten/${encodeURIComponent(r.id)}">✏️ Titel & Kategorie</a>
       <button class="btn danger" data-action="delete" data-id="${esc(r.id)}">🗑️ Löschen</button>
     </div>`;
+}
+
+function viewMerge(id) {
+  const r = recById(id);
+  if (!r) return viewNotFound();
+  setTab('');
+  topbar({ title: 'Zusammenführen', back: `#/r/${encodeURIComponent(r.id)}` });
+  // Passende Kandidaten zuerst: gleiche Kategorie und zeitlich nah eingescannt
+  const list = state.recipes.filter((x) => x.id !== r.id && (x.pages || []).length).map((x) => ({
+    x, score: ((x.cats || []).some((c) => (r.cats || []).includes(c)) ? 0 : 1e13) + Math.abs((x.created || 0) - (r.created || 0)),
+  })).sort((a, b) => a.score - b.score).map((o) => o.x);
+  return `<div class="card" style="margin-top:4px">
+      <p style="margin-top:0">Welches Rezept gehört zu <b>${esc(r.title)}</b>? Seine Seiten werden hinten angehängt, danach gibt es nur noch ein Rezept.</p>
+      <p class="muted" style="margin-bottom:0;font-size:.9rem">Oben stehen die Rezepte, die zur gleichen Zeit eingescannt wurden.</p>
+    </div>
+    ${list.length ? `<div class="rec-grid" style="margin-top:14px">${list.map((x) => `<button class="rec-card pick" data-action="merge-pick" data-id="${esc(r.id)}" data-other="${esc(x.id)}">
+        <div class="thumb ${thumbUrl(x) ? 'scan' : ''}">${thumbUrl(x) ? `<img src="${thumbUrl(x)}" alt="" loading="lazy">` : recipeEmoji(x)}</div>
+        <div class="body"><div class="title">${esc(x.title)}</div><div class="meta"><span>${plural((x.pages || []).length, 'Seite', 'Seiten')} · ${fmtDate(x.created || Date.now())}</span></div></div>
+      </button>`).join('')}</div>` : '<div class="empty">Keine anderen Rezepte vorhanden.</div>'}`;
 }
 
 function viewScan() {
@@ -1310,9 +1410,9 @@ function viewScan() {
       <span class="muted">Fotos oder PDFs vom Scanner – gerne mehrere auf einmal</span>
     </label>
     <label class="toggle" style="margin:14px 2px 4px">
-      <input type="checkbox" id="combine"> <span>Alle ausgewählten Seiten gehören zu <b>einem</b> Rezept</span>
+      <input type="checkbox" id="combine"> <span>Alle ausgewählten Fotos gehören zu <b>einem</b> Rezept</span>
     </label>
-    <p class="muted" style="font-size:.85rem;margin:4px 2px 0">Sonst wird jede Seite ein eigenes Rezept. Die App erkennt Titel und Kategorie automatisch – falls mal etwas nicht stimmt, kannst du es im Rezept unter „✏️“ ändern.</p>
+    <p class="muted" style="font-size:.85rem;margin:4px 2px 0">Ohne Haken erkennt die App selbst, ob eine Seite die Fortsetzung der vorherigen ist (z. B. die Rückseite ohne Zutatenliste) und hängt sie an. Wichtig: die Seiten in der richtigen Reihenfolge auswählen. Im Rezept kannst du Seiten auch später noch hinzufügen, zusammenführen oder abtrennen.</p>
     <div id="scan-queue" class="queue"></div>
     <details class="card" style="margin-top:22px">
       <summary><b>💡 Tipps für gute Ergebnisse</b></summary>
@@ -1480,6 +1580,7 @@ function render() {
   else if (p[0] === 'favoriten') html = viewFavorites();
   else if (p[0] === 'einstellungen') html = viewSettings();
   else if (p[0] === 'verbinden') html = viewJoin(params.get('c') || '');
+  else if (p[0] === 'zusammen') html = viewMerge(p[1]);
   else html = viewNotFound();
   const y = render.keepScroll ? scrollY : 0;
   $('#app').innerHTML = html;
@@ -1518,6 +1619,62 @@ document.addEventListener('click', async (e) => {
       try { await rotateRecipe(r, 90); toast('Gedreht ✓'); } catch (err) { toast('Fehler: ' + err.message); }
       render.keepScroll = true;
       render();
+      break;
+    }
+    case 'merge-pick': {
+      const r = recById(id), other = recById(el.dataset.other);
+      if (!r || !other) break;
+      if (!confirm(`„${other.title}“ an „${r.title}“ anhängen? Danach gibt es nur noch ein Rezept mit ${(r.pages || []).length + (other.pages || []).length} Seiten.`)) break;
+      await mergeRecipes(r, other);
+      toast('Zusammengeführt ✓');
+      location.replace(`#/r/${encodeURIComponent(r.id)}`);
+      break;
+    }
+    case 'page-up': case 'page-del': case 'page-rotate': case 'page-split': {
+      const r = recById(id), i = Number(el.dataset.i);
+      if (!r || !r.pages[i]) break;
+      const hasTexts = r.pageTexts && r.pageTexts.length === r.pages.length;
+      if (a === 'page-up') {
+        [r.pages[i - 1], r.pages[i]] = [r.pages[i], r.pages[i - 1]];
+        if (hasTexts) [r.pageTexts[i - 1], r.pageTexts[i]] = [r.pageTexts[i], r.pageTexts[i - 1]];
+        if (i === 1) r.thumb = await canvasToBlob(scaleCanvas(await imageToCanvas(r.pages[0], 1200), 480), 0.75);
+        refreshAfterPageChange(r);
+        await saveRecipe(r);
+      } else if (a === 'page-del') {
+        if (!confirm(`Seite ${i + 1} aus diesem Rezept löschen?`)) break;
+        r.pages = r.pages.filter((_, k) => k !== i);
+        if (hasTexts) r.pageTexts = r.pageTexts.filter((_, k) => k !== i);
+        if (i === 0) r.thumb = await canvasToBlob(scaleCanvas(await imageToCanvas(r.pages[0], 1200), 480), 0.75);
+        refreshAfterPageChange(r);
+        await saveRecipe(r);
+        toast('Seite gelöscht');
+      } else if (a === 'page-rotate') {
+        el.disabled = true; el.innerHTML = '<span class="spin"></span>';
+        const c = rotateCanvas(await imageToCanvas(r.pages[i], 2200), 90);
+        r.pages[i] = await canvasToBlob(c, 0.82);
+        if (i === 0) r.thumb = await canvasToBlob(scaleCanvas(c, 480), 0.75);
+        const res = await ocrCanvas(c, () => {});
+        if (!hasTexts) r.pageTexts = r.pages.map((_, k) => (k === 0 ? r.text || '' : ''));
+        r.pageTexts[i] = res.text;
+        refreshAfterPageChange(r);
+        await saveRecipe(r);
+      } else {
+        el.disabled = true; el.innerHTML = '<span class="spin"></span> wird abgetrennt…';
+        const n = await splitPage(r, i);
+        toast(`Eigenes Rezept: „${n.title}“`);
+      }
+      render.keepScroll = true;
+      render();
+      break;
+    }
+    case 'split-job': {
+      const job = queue.find((j) => j.id === id);
+      const r = job && recById(job.recipeId);
+      if (!r) break;
+      el.disabled = true; el.textContent = 'wird abgetrennt…';
+      const n = await splitPage(r, job.pageNo - 1);
+      job.merged = false; job.recipeId = n.id;
+      renderQueue();
       break;
     }
     case 'reread': {
@@ -1650,6 +1807,11 @@ document.addEventListener('change', async (e) => {
   const el = e.target, a = el.dataset.action;
   if (a === 'sort') {
     state.sort = el.value; LS.set('sort', state.sort); render();
+  } else if (a === 'add-pages' && el.files.length) {
+    const files = [...el.files];
+    el.value = '';
+    toast('Seite wird gelesen und hinzugefügt…');
+    enqueue(files, true, { into: el.dataset.id });
   } else if (a === 'scan-files' && el.files.length) {
     const files = [...el.files];
     const combine = $('#combine')?.checked;
