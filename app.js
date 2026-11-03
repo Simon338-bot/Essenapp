@@ -163,10 +163,10 @@ const ANIMAL = { milch: 1, sahne: 1, butter: 1, kase: 1, quark: 1, joghurt: 1, '
 
 const RULES = {
   kuchen: {
-    kw: { kuchen: 5, torte: 5, springform: 4, tortenboden: 4, biskuit: 3, gugelhupf: 5, napfkuchen: 5, kastenform: 3, muffin: 5, cupcake: 5, '^tarte': 4, streusel: 2, tortenguss: 4, zuckerguss: 2, kuvertur: 1, backblech: 1 },
+    kw: { kuchen: 5, brownie: 5, 'torte$': 5, '=torten': 5, springform: 4, tortenboden: 4, biskuit: 3, gugelhupf: 5, napfkuchen: 5, kastenform: 3, muffin: 5, cupcake: 5, '^tarte': 4, streusel: 2, tortenguss: 4, zuckerguss: 2, kuvertur: 1, backblech: 1 },
     subs: {
-      blechkuchen: { blechkuchen: 6, '^blech': 4, backblech: 3, fettpfanne: 3, 'vom blech': 4, 'auf dem blech': 4 },
-      torten: { torte: 5, sahnetorte: 6, tortenring: 4, tortenboden: 3, biskuit: 4, 'steif schlagen': 3, 'steif geschlagen': 3, buttercreme: 4, fullung: 2, '^schicht': 2, waagerecht: 3, 'boden halbieren': 4, 'einmal durchschneiden': 4, sahnesteif: 3 },
+      blechkuchen: { blechkuchen: 6, '^blech': 4, backblech: 3, fettpfanne: 3, 'vom blech': 4, 'auf dem blech': 4, tassenkuchen: 5, brownie: 3, 'frau holle': 6, 'donauwelle': 6, 'bienenstich': 3, 'butterkuchen': 6, 'zuckerkuchen': 6, 'streuselkuchen': 4 },
+      torten: { 'torte$': 5, '=torten': 5, sahnetorte: 6, tortenring: 4, tortenboden: 3, biskuit: 4, 'steif schlagen': 3, 'steif geschlagen': 3, buttercreme: 4, fullung: 2, '^schicht': 2, waagerecht: 3, 'boden halbieren': 4, 'einmal durchschneiden': 4, sahnesteif: 3 },
       ruhrkuchen: {
         ruhrkuchen: 6, ruhrteig: 5, gugelhupf: 5, napfkuchen: 5, kastenform: 3, marmorkuchen: 6, kastenkuchen: 5,
         zitronenkuchen: 4, schokokuchen: 4, schokoladenkuchen: 4, schokoladekuchen: 4, nusskuchen: 4, rotweinkuchen: 5,
@@ -264,12 +264,13 @@ const RULES = {
   },
 };
 
-const CLASSIFIER_VERSION = 2; // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
+const CLASSIFIER_VERSION = 3; // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
 const kwCache = new Map();
 function kwRegex(k) {
   if (!kwCache.has(k)) {
-    const body = k.replace(/^[=^]/, '').replace(/[.*+?()[\]{}|\\]/g, '\\$&').replace(/ /g, '\\s+');
-    const re = k[0] === '=' ? new RegExp(`\\b${body}\\b`) : k[0] === '^' ? new RegExp(`\\b${body}`) : new RegExp(body);
+    const end = k.endsWith('$') ? '\\b' : '';
+    const body = k.replace(/^[=^]/, '').replace(/\$$/, '').replace(/[.*+?()[\]{}|\\]/g, '\\$&').replace(/ /g, '\\s+');
+    const re = k[0] === '=' ? new RegExp(`\\b${body}\\b`) : k[0] === '^' ? new RegExp(`\\b${body}${end}`) : new RegExp(body + end);
     kwCache.set(k, re);
   }
   return kwCache.get(k);
@@ -284,14 +285,42 @@ function kwScore(dict, body, title) {
   return s;
 }
 
+// Steht der Name einer (Unter-)Kategorie ausdrücklich im Rezept, z. B. „Blechkuchen“ oder „Vorspeise“?
+// Kleine Lesefehler beim Scannen werden verziehen. Ergebnis: 0 = nein, 1 = im Text, 3 = im Titel
+function mentionScore(name, bodyToks, titleToks, body = '', title = '') {
+  let best = 0;
+  // „Cremes & Puddings“ → zwei Möglichkeiten; „Ohne Backen“ muss als Ganzes vorkommen
+  for (const alt of norm(name).split('&').map((x) => x.trim()).filter(Boolean)) {
+    const words = alt.split(/[\s-]+/).filter(Boolean);
+    if (words.length > 1) {
+      const re = new RegExp('\\b' + words.map((w) => w.replace(/[^a-z0-9]/g, '')).join('[\\s-]*'));
+      if (re.test(title)) best = 3; else if (!best && re.test(body)) best = 1;
+      continue;
+    }
+    const w = words[0];
+    if (w.length < 6) continue;
+    const st = stem(w);
+    const hit = (toks) => toks.some((t) => stem(t) === st || (w.length >= 8 && Math.abs(t.length - w.length) <= 1 && lev(t, w, 1) <= 1));
+    if (hit(titleToks)) best = 3; else if (!best && hit(bodyToks)) best = 1;
+  }
+  return best;
+}
 function classify(text, title) {
   const body = norm(text).replace(/-\s*\n\s*/g, '').replace(/\s+/g, ' ');
   const ti = norm(title);
   const has = (re) => re.test(body);
+  const bodyToks = [...new Set(body.split(/[^a-z0-9]+/).filter((t) => t.length >= 5))];
+  const titleToks = [...new Set(ti.split(/[^a-z0-9]+/).filter((t) => t.length >= 5))];
+  const subMention = {};
   const scores = {};
   for (const [cid, rule] of Object.entries(RULES)) {
-    if (!catById(cid)) continue;
-    scores[cid] = kwScore(rule.kw, body, ti);
+    const cat = catById(cid);
+    if (!cat) continue;
+    scores[cid] = kwScore(rule.kw, body, ti) + mentionScore(cat.name, bodyToks, titleToks, body, ti) * 6;
+    for (const sub of cat.subs) {
+      const m = mentionScore(sub.name, bodyToks, titleToks, body, ti);
+      if (m) { subMention[`${cid}/${sub.id}`] = m; scores[cid] += m * 2; }
+    }
   }
   // Allgemeine Hinweise: Backen + Süßes → Kuchen/Gebäck
   const baking = has(/backofen|vorheizen|backen|umluft|unterhitze|°\s*c|\bgrad\b/) && has(/\bmehl\b|weizenmehl|backpulver/);
@@ -320,17 +349,20 @@ function classify(text, title) {
     const cat = catById(cid), rule = RULES[cid];
     if (!cat || !rule) continue;
     const add = (sid) => { if (subById(cat, sid) && !subs.includes(`${cid}/${sid}`)) subs.push(`${cid}/${sid}`); };
+    const said = (sid) => subMention[`${cid}/${sid}`] || 0;
     if (rule.savory) {
-      if (fish) add('fisch');
-      if (poultry) subById(cat, 'geflugel') ? add('geflugel') : add('fleisch');
-      if (meat) add('fleisch');
+      const veggieSaid = said('vegetarisch') || said('vegan');
+      if (veggieSaid) { add(said('vegan') ? 'vegan' : 'vegetarisch'); if (said('vegan')) add('vegetarisch'); }
+      if (fish && !veggieSaid) add('fisch');
+      if (poultry && !veggieSaid) subById(cat, 'geflugel') ? add('geflugel') : add('fleisch');
+      if (meat && !veggieSaid) add('fleisch');
       if (!fish && !meat && !poultry) {
         add('vegetarisch');
         if (isVegan || !animal) add('vegan');
       }
     }
     if (rule.subs) {
-      const ss = Object.entries(rule.subs).map(([sid, d]) => [sid, kwScore(d, body, ti)]).filter(([, s]) => s >= 3).sort((a, b) => b[1] - a[1]);
+      const ss = Object.entries(rule.subs).map(([sid, d]) => [sid, kwScore(d, body, ti) + said(sid) * 10]).filter(([, s]) => s >= 3).sort((a, b) => b[1] - a[1]);
       if (ss.length) ss.filter(([, s]) => s >= ss[0][1] * 0.6).slice(0, 2).forEach(([sid]) => add(sid));
       // Nichts Eindeutiges gefunden? Dann die beste Unterkategorie mit schwächeren Hinweisen nehmen
       if (!subs.some((k) => k.startsWith(cid + '/'))) {
@@ -347,17 +379,122 @@ function classify(text, title) {
 
 // ---------- Titel aus dem erkannten Text bestimmen ----------
 const NOT_TITLE = /^(zutaten|zubereitung|fur\s|für\s|menge|portion|personen|rezept\b|seite\s|zubereitungszeit|backzeit|tipp)/i;
+function titleIndex(lines) {
+  const cands = lines.slice(0, 8)
+    .map((l, i) => ({ h: l.h || 0, i, text: cleanTitle(l.text) }))
+    .filter((l) => (l.text.match(/[a-zäöüß]/gi) || []).length >= 4 && !NOT_TITLE.test(l.text) && !/^\d/.test(l.text));
+  if (!cands.length) return -1;
+  const maxH = Math.max(...cands.map((c) => c.h));
+  return (cands.find((c) => c.h >= maxH * 0.85) || cands[0]).i;
+}
 function pickTitle(lines, fallback) {
-  // lines: [{text, h}] in Lesereihenfolge
+  const info = pickTitleInfo(lines);
+  return info ? info.text : fallback;
+}
+function pickTitleInfo(lines) {
+  // lines: [{text, h, conf}] in Lesereihenfolge
   const cands = lines.slice(0, 8)
     .map((l, i) => ({ ...l, i, text: cleanTitle(l.text) }))
     .filter((l) => (l.text.match(/[a-zäöüß]/gi) || []).length >= 4 && !NOT_TITLE.test(l.text) && !/^\d/.test(l.text));
-  if (!cands.length) return fallback;
+  if (!cands.length) return null;
   const maxH = Math.max(...cands.map((c) => c.h || 0));
   const best = { ...(cands.find((c) => (c.h || 0) >= maxH * 0.85) || cands[0]) };
   const next = cands.find((c) => c.i === best.i + 1);
-  if (next && best.h && next.h >= best.h * 0.85 && (best.text + next.text).length <= 60) best.text += ' ' + next.text;
-  return best.text.length > 70 ? best.text.slice(0, 70).replace(/\s+\S*$/, '') + '…' : best.text;
+  if (next && best.h && next.h >= best.h * 0.85 && (best.text + next.text).length <= 60) {
+    best.text += ' ' + next.text;
+    if (next.conf != null && best.conf != null) best.conf = Math.min(best.conf, next.conf);
+  }
+  const text = best.text.length > 70 ? best.text.slice(0, 70).replace(/\s+\S*$/, '') : best.text;
+  return { text, conf: best.conf };
+}
+
+// ---------- Titel aufräumen ----------
+const LETTER = /\p{L}/gu;
+// Wörter mit Bindestrich („Senf-Dill-Soße“) werden teilweise geprüft
+function isWordy(tok) {
+  if (tok.includes('-')) { const parts = tok.split('-').filter(Boolean); return parts.length > 0 && parts.every(isWordyPart); }
+  return isWordyPart(tok);
+}
+function isWordyPart(tok) {
+  const letters = (tok.match(LETTER) || []).length;
+  return letters >= 2 && letters / tok.length >= 0.75 && /[aeiouyäöü]/i.test(tok) && !/\p{Ll}\p{Lu}/u.test(tok.replace(/^\p{L}/u, ''));
+}
+// Entfernt Lesereste („DE Erdnussbutter - Brownies“ → „Erdnussbutter-Brownies“) und korrigiert
+// Titelwörter, die im Rezepttext richtig geschrieben vorkommen
+function tidyTitle(raw, text = '') {
+  let t = cleanTitle(raw).replace(/[|_~•*"„“”«»<>{}\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+  t = t.replace(/(\p{L})\s*[-–]\s+(?=\p{L})|(\p{L})\s+[-–]\s*(?=\p{L})/gu, (m, a, b) => (a || b) + '-');
+  let toks = t.split(' ').filter(Boolean);
+  const junk = (x) => x.length <= 2 || !isWordy(x.replace(/[&!.,:;'’()]/g, '') || x);
+  while (toks.length > 1 && junk(toks[0]) && !/^(\d+|zu|im|am|à)$/i.test(toks[0])) toks.shift();
+  while (toks.length > 1 && junk(toks[toks.length - 1])) toks.pop();
+  toks = toks.filter((x, i) => i === 0 || /^(&|und|mit|an|in|à|la|al|e)$/i.test(x) || !junk(x) || /^\d/.test(x));
+  // Rechtschreibung mit dem Rezepttext abgleichen
+  const bodyWords = String(text).split(/[^\p{L}-]+/u).filter((w) => w.length >= 5);
+  toks = toks.map((tok) => {
+    const parts = tok.split('-');
+    return parts.map((part) => {
+      const n = norm(part);
+      if (n.length < 5) return part;
+      const max = n.length >= 9 ? 2 : 1;
+      // Die Überschrift steht selbst im Text – zählt also einmal mit
+      const same = bodyWords.filter((w) => norm(w) === n).length;
+      const alts = bodyWords.filter((w) => {
+        const m = norm(w);
+        return m !== n && !m.startsWith(n) && !n.startsWith(m) && lev(m, n, max) <= max;
+      });
+      if (alts.length > Math.max(0, same - 1)) return fixCase(alts[0], part);
+      return part;
+    }).join('-');
+  });
+  return toks.join(' ').replace(/\s+([,.!])/g, '$1').trim();
+}
+function fixCase(word, like) {
+  return /^\p{Lu}/u.test(like) ? word.charAt(0).toUpperCase() + word.slice(1) : word;
+}
+function titleLooksGood(t, conf) {
+  if (!t || /^rezept vom /i.test(t)) return false;
+  const toks = t.split(/\s+/).filter(Boolean);
+  const letters = (t.match(LETTER) || []).length;
+  const wordy = toks.filter((x) => isWordy(x.replace(/[&!.,:;'’()]/g, '') || x)).length;
+  if (letters < 4 || wordy / toks.length < 0.7) return false;
+  return conf == null || conf >= 45;
+}
+// Einfacher Titel aus Kategorie + Hauptzutat, falls die Überschrift nicht lesbar ist
+const MAIN_INGREDIENTS = [['apfel', 'Äpfeln'], ['kirsch', 'Kirschen'], ['erdbeer', 'Erdbeeren'], ['zwetschg', 'Zwetschgen'], ['pflaum', 'Pflaumen'],
+  ['rhabarber', 'Rhabarber'], ['heidelbeer', 'Heidelbeeren'], ['himbeer', 'Himbeeren'], ['aprikos', 'Aprikosen'], ['pfirsich', 'Pfirsichen'], ['banane', 'Bananen'],
+  ['mandarin', 'Mandarinen'], ['zitrone', 'Zitrone'], ['schoko', 'Schokolade'], ['erdnuss', 'Erdnüssen'], ['nuss', 'Nüssen'], ['mohn', 'Mohn'], ['quark', 'Quark'],
+  ['lachs', 'Lachs'], ['thunfisch', 'Thunfisch'], ['garnele', 'Garnelen'], ['hahnchen', 'Hähnchen'], ['pute', 'Pute'], ['hackfleisch', 'Hackfleisch'],
+  ['rind', 'Rindfleisch'], ['schwein', 'Schweinefleisch'], ['kartoffel', 'Kartoffeln'], ['zucchini', 'Zucchini'], ['spinat', 'Spinat'], ['brokkoli', 'Brokkoli'],
+  ['kurbis', 'Kürbis'], ['spargel', 'Spargel'], ['champignon', 'Champignons'], ['pilz', 'Pilzen'], ['linsen', 'Linsen'], ['kichererbse', 'Kichererbsen'],
+  ['tomate', 'Tomaten'], ['paprika', 'Paprika'], ['nudel', 'Nudeln'], ['reis', 'Reis'], ['feta', 'Feta'], ['mozzarella', 'Mozzarella'], ['kase', 'Käse']];
+function autoTitle(text, cats, subs) {
+  const cid = cats[0], sid = (subs.find((k) => k.startsWith(cid + '/')) || '').split('/')[1];
+  const kuchenSub = { blechkuchen: 'Blechkuchen', ruhrkuchen: 'Rührkuchen', obstkuchen: 'Obstkuchen', kasekuchen: 'Käsekuchen', torten: 'Torte', 'muffins-cupcakes': 'Muffins', 'ohne-backen': 'Kuchen ohne Backen' };
+  const labels = { vorspeisen: 'Vorspeise', suppen: 'Suppe', hauptgerichte: 'Hauptgericht', beilagen: sid === 'salate' ? 'Salat' : 'Beilage',
+    nachspeisen: 'Dessert', kuchen: kuchenSub[sid] || 'Kuchen', gebaeck: sid === 'weihnachtsplatzchen' ? 'Plätzchen' : 'Gebäck', geburtstag: 'Party-Rezept',
+    snacks: 'Snack', fruehstueck: sid === 'brot' ? 'Brot' : sid === 'brotchen' ? 'Brötchen' : 'Frühstück', getraenke: 'Getränk' };
+  let label = labels[cid] || catById(cid)?.name || '';
+  if (!label || cid === 'sonstiges') return '';
+  if (['vorspeisen', 'suppen', 'hauptgerichte'].includes(cid) && sid === 'vegetarisch' && !subs.includes(cid + '/vegan')) label = { vorspeisen: 'Vegetarische Vorspeise', suppen: 'Vegetarische Suppe', hauptgerichte: 'Vegetarisches Hauptgericht' }[cid];
+  if (['vorspeisen', 'suppen', 'hauptgerichte'].includes(cid) && subs.includes(cid + '/vegan')) label = { vorspeisen: 'Vegane Vorspeise', suppen: 'Vegane Suppe', hauptgerichte: 'Veganes Hauptgericht' }[cid];
+  const body = norm(text);
+  let best = null, bestN = 0;
+  for (const [k, word] of MAIN_INGREDIENTS) {
+    const n = body.split(k).length - 1;
+    if (n > bestN && !norm(label).includes(k)) { best = word; bestN = n; }
+  }
+  return best ? `${label} mit ${best}` : label;
+}
+// Titel + Kategorien für einen frisch gelesenen Scan bestimmen
+function titleAndCats(lines, text, fallback) {
+  const info = pickTitleInfo(lines);
+  const t = info ? tidyTitle(info.text, text) : '';
+  const good = titleLooksGood(t, info && info.conf);
+  let title = good ? t : '';
+  const { cats, subs } = classify(text, title);
+  if (!good) title = autoTitle(text, cats, subs) || t || fallback || `Rezept vom ${fmtDate(Date.now())}`;
+  return { title, cats, subs };
 }
 function cleanTitle(s) {
   s = String(s || '').replace(/\s+/g, ' ').replace(/^[^A-Za-zÄÖÜäöüß0-9]+|[^A-Za-zÄÖÜäöüß0-9!)]+$/g, '').trim();
@@ -500,12 +637,94 @@ function pdfLines(items) {
   });
 }
 
+// Fotos aufbereiten: Schatten und ungleichmäßiges Licht ausgleichen, Graustufen, mehr Kontrast
+function enhanceForOcr(src) {
+  const w = src.width, h = src.height;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(src, 0, 0);
+  const img = ctx.getImageData(0, 0, w, h), d = img.data;
+  const g = new Float32Array(w * h);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) g[j] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  // Papierhelligkeit blockweise schätzen (helle 10 % je Block)
+  const B = 40, bw = Math.ceil(w / B), bh = Math.ceil(h / B);
+  const bg = new Float32Array(bw * bh);
+  const hist = new Uint32Array(64);
+  for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
+    hist.fill(0);
+    let n = 0;
+    for (let y = by * B; y < Math.min(h, (by + 1) * B); y += 2) for (let x = bx * B; x < Math.min(w, (bx + 1) * B); x += 2) { hist[g[y * w + x] >> 2]++; n++; }
+    let acc = 0, k = 63;
+    for (; k > 0; k--) { acc += hist[k]; if (acc >= n * 0.1) break; }
+    bg[by * bw + bx] = Math.max(60, k * 4 + 2);
+  }
+  // Hintergrund glätten
+  const sm = new Float32Array(bw * bh);
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+    let sum = 0, cnt = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const yy = y + dy, xx = x + dx;
+      if (yy >= 0 && yy < bh && xx >= 0 && xx < bw) { sum += bg[yy * bw + xx]; cnt++; }
+    }
+    sm[y * bw + x] = Math.max(bg[y * bw + x], sum / cnt);
+  }
+  for (let y = 0; y < h; y++) {
+    const fy = Math.min(bh - 1, Math.max(0, y / B - 0.5)), y0 = Math.floor(fy), y1 = Math.min(bh - 1, y0 + 1), ty = fy - y0;
+    for (let x = 0; x < w; x++) {
+      const fx = Math.min(bw - 1, Math.max(0, x / B - 0.5)), x0 = Math.floor(fx), x1 = Math.min(bw - 1, x0 + 1), tx = fx - x0;
+      const b = (sm[y0 * bw + x0] * (1 - tx) + sm[y0 * bw + x1] * tx) * (1 - ty) + (sm[y1 * bw + x0] * (1 - tx) + sm[y1 * bw + x1] * tx) * ty;
+      let v = Math.min(255, (g[y * w + x] / b) * 255);
+      v = 255 - (255 - v) * 1.35;
+      const i = (y * w + x) * 4;
+      d[i] = d[i + 1] = d[i + 2] = v < 0 ? 0 : v;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+// Eine einzelne Zeile (die Überschrift) vergrößert noch einmal lesen
+async function rereadLine(worker, src, bb) {
+  const lh = bb.y1 - bb.y0;
+  if (lh < 8) return null;
+  const pad = Math.round(lh * 0.4);
+  const x0 = Math.max(0, bb.x0 - pad), y0 = Math.max(0, bb.y0 - pad);
+  const x1 = Math.min(src.width, bb.x1 + pad), y1 = Math.min(src.height, bb.y1 + pad);
+  const scale = Math.max(0.5, Math.min(3, 60 / lh));
+  const c = document.createElement('canvas');
+  c.width = Math.round((x1 - x0) * scale); c.height = Math.round((y1 - y0) * scale);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, x0, y0, x1 - x0, y1 - y0, 0, 0, c.width, c.height);
+  await worker.setParameters({ tessedit_pageseg_mode: '7' });
+  try {
+    const { data } = await worker.recognize(c);
+    return { text: String(data.text || '').replace(/\s+/g, ' ').trim(), conf: data.confidence };
+  } finally {
+    await worker.setParameters({ tessedit_pageseg_mode: '3' });
+  }
+}
 async function ocrCanvas(canvas, onPct) {
   ocrProgress = (m) => { if (m.status === 'recognizing text') onPct(Math.round(m.progress * 100)); else if (/load|init/.test(m.status)) onPct(-1); };
   const w = await getOcr();
-  const { data } = await w.recognize(canvas);
-  const lines = (data.lines || []).map((l) => ({ text: l.text.trim(), h: l.bbox ? l.bbox.y1 - l.bbox.y0 : 0 })).filter((l) => l.text);
-  return { text: data.text || '', lines, conf: data.confidence };
+  const src = enhanceForOcr(canvas);
+  const { data } = await w.recognize(src);
+  const lines = (data.lines || []).map((l) => ({ text: l.text.trim(), h: l.bbox ? l.bbox.y1 - l.bbox.y0 : 0, bbox: l.bbox, conf: l.confidence })).filter((l) => l.text);
+  let text = data.text || '';
+  // Die Überschrift ist oft in Zierschrift – sie wird noch einmal vergrößert gelesen
+  const ti = titleIndex(lines);
+  if (ti >= 0 && lines[ti].bbox) {
+    ocrProgress = () => {};
+    try {
+      const better = await rereadLine(w, src, lines[ti].bbox);
+      if (better && better.text && better.conf > (lines[ti].conf || 0) + 3 && (better.text.match(/[a-zäöüß]/gi) || []).length >= 3) {
+        text = text.replace(lines[ti].text, better.text);
+        lines[ti].text = better.text;
+      }
+    } catch (err) { console.warn(err); }
+  }
+  return { text, lines, conf: data.confidence };
 }
 
 // Warteschlange der Scans (bleibt beim Navigieren erhalten)
@@ -615,8 +834,7 @@ async function processGroup(job) {
   job.status = 'Wird einsortiert…';
   renderQueue();
   const text = texts.join('\n\n').trim();
-  const title = pickTitle(allLines, fileTitle(job.group[0].name) || `Rezept vom ${fmtDate(Date.now())}`);
-  const { cats, subs } = classify(text, title);
+  const { title, cats, subs } = titleAndCats(allLines, text, fileTitle(job.group[0].name));
   const pages = [];
   for (const p of job.group) pages.push(await canvasToBlob(scaleCanvas(p.canvas, 1800), 0.82));
   const thumb = await canvasToBlob(scaleCanvas(job.group[0].canvas, 480), 0.75);
@@ -625,6 +843,25 @@ async function processGroup(job) {
   job.recipeId = r.id;
 }
 
+// Bestehendes Rezept mit der aktuellen Texterkennung neu lesen (Bilder bleiben gleich)
+async function rereadRecipe(r) {
+  const texts = [], lines = [];
+  for (const b of r.pages || []) {
+    const res = await ocrCanvas(await imageToCanvas(await toBlob(b), 2200), () => {});
+    texts.push(res.text); lines.push(...res.lines);
+  }
+  if (!texts.length) return;
+  r.text = texts.join('\n\n').trim();
+  applyTitleAndCats(r, lines);
+  await saveRecipe(r);
+}
+function applyTitleAndCats(r, lines) {
+  if (!r.manualTitle) {
+    const res = titleAndCats(lines, r.text, r.title);
+    r.title = res.title;
+    if (!r.manualCats) { r.cats = res.cats; r.subs = res.subs; }
+  } else if (!r.manualCats) Object.assign(r, classify(r.text, r.title));
+}
 // Bestehendes Rezept: drehen und neu lesen
 async function rotateRecipe(r, deg) {
   const canvases = [];
@@ -638,8 +875,7 @@ async function rotateRecipe(r, deg) {
   for (const c of canvases) r.pages.push(await canvasToBlob(c, 0.82));
   r.thumb = await canvasToBlob(scaleCanvas(canvases[0], 480), 0.75);
   r.text = texts.join('\n\n').trim();
-  if (!r.manualTitle) r.title = pickTitle(lines, r.title);
-  if (!r.manualCats) Object.assign(r, classify(r.text, r.title));
+  applyTitleAndCats(r, lines);
   r.imgv = Date.now();
   dropUrls(r.id);
   await saveRecipe(r);
@@ -907,7 +1143,8 @@ function viewRecipe(id) {
     ${pages.length ? '<p class="muted center" style="font-size:.85rem">Tippe auf das Bild zum Vergrößern.</p>' : ''}
     ${r.text ? `<details class="card ocr"><summary>🔤 Erkannter Text <span class="muted">(für die Suche)</span></summary><p class="notes">${esc(r.text)}</p></details>` : ''}
     <div class="rec-actions">
-      ${pages.length ? `<button class="btn" data-action="rotate" data-id="${esc(r.id)}">↻ Drehen</button>` : ''}
+      ${pages.length ? `<button class="btn" data-action="rotate" data-id="${esc(r.id)}">↻ Drehen</button>
+        <button class="btn" data-action="reread" data-id="${esc(r.id)}">🔤 Neu lesen</button>` : ''}
       <a class="btn" href="#/bearbeiten/${encodeURIComponent(r.id)}">✏️ Titel & Kategorie</a>
       <button class="btn danger" data-action="delete" data-id="${esc(r.id)}">🗑️ Löschen</button>
     </div>`;
@@ -1022,7 +1259,11 @@ function viewSettings() {
     <div class="section-title">🤖 Automatisch sortieren</div>
     <div class="card" style="margin-top:0">
       <p style="margin-top:0" class="muted">Sortiert alle Rezepte noch einmal neu ein. Rezepte, die du selbst geändert hast, bleiben, wie sie sind.</p>
-      <button class="btn" data-action="reclassify-all">Alle neu einsortieren</button>
+      <div class="btn-row">
+        <button class="btn" data-action="reclassify-all">Alle neu einsortieren</button>
+        <button class="btn" data-action="reread-all">Alle Scans neu lesen</button>
+      </div>
+      <p class="muted" style="font-size:.85rem;margin-bottom:0">„Neu lesen“ liest die Scans noch einmal mit der aktuellen Texterkennung – sinnvoll nach einem Update.</p>
     </div>
 
     <div class="section-title">💾 Sicherung</div>
@@ -1128,6 +1369,30 @@ document.addEventListener('click', async (e) => {
       try { await rotateRecipe(r, 90); toast('Gedreht ✓'); } catch (err) { toast('Fehler: ' + err.message); }
       render.keepScroll = true;
       render();
+      break;
+    }
+    case 'reread': {
+      const r = recById(id);
+      el.disabled = true;
+      el.innerHTML = '<span class="spin"></span> Wird gelesen…';
+      try { await rereadRecipe(r); toast('Neu gelesen ✓'); } catch (err) { toast('Fehler: ' + err.message); }
+      render.keepScroll = true;
+      render();
+      break;
+    }
+    case 'reread-all': {
+      const list = state.recipes.filter((r) => (r.pages || []).length);
+      if (!list.length) { toast('Keine Scans vorhanden'); break; }
+      if (!confirm(`${plural(list.length, 'Rezept', 'Rezepte')} mit der verbesserten Texterkennung neu lesen? Das dauert etwa ${Math.max(1, Math.round(list.length * 8 / 60))} Minute(n). Selbst geänderte Titel und Kategorien bleiben erhalten.`)) break;
+      el.disabled = true;
+      let n = 0;
+      for (const r of list) {
+        el.innerHTML = `<span class="spin"></span> ${++n} von ${list.length}…`;
+        try { await rereadRecipe(r); } catch (err) { console.error(err); }
+      }
+      el.disabled = false;
+      el.textContent = 'Alle Scans neu lesen';
+      toast('Fertig ✓ Alle Rezepte neu gelesen');
       break;
     }
     case 'delete': {
@@ -1696,9 +1961,19 @@ async function init() {
   }
   if (LS.get('classifier', 0) < CLASSIFIER_VERSION) {
     for (const r of state.recipes) {
-      if (r.manualCats || !recipeText(r)) continue;
-      const res = classify(recipeText(r), r.title);
-      if (JSON.stringify(res) !== JSON.stringify({ cats: r.cats, subs: r.subs })) { Object.assign(r, res); await saveRecipe(r); }
+      const text = recipeText(r);
+      if (!text) continue;
+      const before = JSON.stringify([r.title, r.cats, r.subs]);
+      if (!r.manualTitle && r.scanned) {
+        const t = tidyTitle(r.title, text);
+        if (titleLooksGood(t)) r.title = t;
+        else {
+          const c = classify(text, '');
+          r.title = autoTitle(text, c.cats, c.subs) || t || r.title;
+        }
+      }
+      if (!r.manualCats) Object.assign(r, classify(text, r.title));
+      if (JSON.stringify([r.title, r.cats, r.subs]) !== before) await saveRecipe(r);
     }
     LS.set('classifier', CLASSIFIER_VERSION);
   }
