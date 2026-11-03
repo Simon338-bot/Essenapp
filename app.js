@@ -88,22 +88,34 @@ const state = { recipes: [], categories: [], lastList: '#/', sort: LS.get('sort'
 function buildDefaultCategories() {
   return DEFAULT_CATEGORIES.map((c) => ({ id: c.id, name: c.name, emoji: c.emoji, subs: c.subs.map((s) => ({ id: slug(s), name: s })) }));
 }
-const saveCategories = () => LS.set('categories', state.categories);
+function saveCategories() {
+  LS.set('categories', state.categories);
+  LS.set('catsUpdated', Date.now());
+  LS.set('catsDirty', true);
+  scheduleSync();
+}
 const catById = (id) => state.categories.find((c) => c.id === id);
 const subById = (cat, sid) => cat && cat.subs.find((s) => s.id === sid);
 const recById = (id) => state.recipes.find((r) => r.id === id);
 
-async function saveRecipe(r) {
-  r.updated = Date.now();
+// remote: Daten kommen aus dem Familien-Rezeptbuch · quiet: nur lokal (z. B. Favorit)
+async function saveRecipe(r, { remote = false, quiet = false } = {}) {
+  if (!remote && !quiet) { r.updated = Date.now(); r.dirty = true; }
   await DB.put(r);
   const i = state.recipes.findIndex((x) => x.id === r.id);
   if (i >= 0) state.recipes[i] = r; else state.recipes.push(r);
   delete searchCache[r.id];
+  if (!remote && !quiet) scheduleSync();
 }
-async function deleteRecipe(id) {
+async function deleteRecipe(id, { remote = false } = {}) {
+  const r = recById(id);
   await DB.del(id);
-  state.recipes = state.recipes.filter((r) => r.id !== id);
+  state.recipes = state.recipes.filter((x) => x.id !== id);
   dropUrls(id);
+  if (!remote && r && r.synced) {
+    LS.set('pendingDeletes', [...LS.get('pendingDeletes', []), id]);
+    scheduleSync();
+  }
 }
 
 // Bild-URLs für gespeicherte Scans (Blobs)
@@ -608,7 +620,7 @@ async function processGroup(job) {
   const pages = [];
   for (const p of job.group) pages.push(await canvasToBlob(scaleCanvas(p.canvas, 1800), 0.82));
   const thumb = await canvasToBlob(scaleCanvas(job.group[0].canvas, 480), 0.75);
-  const r = { id: uid(), title, cats, subs, text, pages, thumb, created: Date.now(), fav: false, scanned: true };
+  const r = { id: uid(), title, cats, subs, text, pages, thumb, created: Date.now(), fav: false, scanned: true, imgv: Date.now() };
   await saveRecipe(r);
   job.recipeId = r.id;
 }
@@ -628,6 +640,7 @@ async function rotateRecipe(r, deg) {
   r.text = texts.join('\n\n').trim();
   if (!r.manualTitle) r.title = pickTitle(lines, r.title);
   if (!r.manualCats) Object.assign(r, classify(r.text, r.title));
+  r.imgv = Date.now();
   dropUrls(r.id);
   await saveRecipe(r);
 }
@@ -798,6 +811,7 @@ function viewHome() {
   const working = queue.some((j) => j.state === 'work' || j.state === 'wait');
   return `
     ${searchBox()}
+    ${Sync.cfg ? `<a class="sync-line" href="#/einstellungen" id="sync-line">${syncLine()}</a>` : ''}
     ${working ? '<a class="banner" href="#/neu"><span class="spin"></span> Rezepte werden gerade eingelesen …</a>' : ''}
     ${!total ? `<div class="empty" style="margin-top:18px"><span class="big">📄</span>
       Noch keine Rezepte eingescannt.<br>Wähle Fotos oder PDFs aus – die App liest sie und sortiert sie automatisch ein.<br><br>
@@ -997,6 +1011,9 @@ function viewSettings() {
   setTab('settings');
   topbar({ title: 'Mehr' });
   return `
+    <div class="section-title">👨‍👩‍👧 Familien-Rezeptbuch</div>
+    <div class="card" style="margin-top:0" id="sync-card">${syncCard()}</div>
+
     <div class="section-title">📂 Kategorien verwalten</div>
     <p class="muted" style="margin-top:-4px;font-size:.9rem">Namen und Emojis direkt antippen und ändern. Wird automatisch gespeichert.</p>
     <div id="cat-editor">${catEditor()}</div>
@@ -1072,6 +1089,7 @@ function render() {
   else if (p[0] === 'suche') html = viewSearch(params.get('q') || '');
   else if (p[0] === 'favoriten') html = viewFavorites();
   else if (p[0] === 'einstellungen') html = viewSettings();
+  else if (p[0] === 'verbinden') html = viewJoin(params.get('c') || '');
   else html = viewNotFound();
   const y = render.keepScroll ? scrollY : 0;
   $('#app').innerHTML = html;
@@ -1096,7 +1114,7 @@ document.addEventListener('click', async (e) => {
     case 'fav': {
       const r = recById(id);
       r.fav = !r.fav;
-      await saveRecipe(r);
+      await saveRecipe(r, { quiet: true });
       el.textContent = r.fav ? '❤️' : '🤍';
       toast(r.fav ? 'Zu Favoriten hinzugefügt' : 'Aus Favoriten entfernt');
       break;
@@ -1186,6 +1204,21 @@ document.addEventListener('click', async (e) => {
       toast('Kategorien zurückgesetzt');
       break;
     case 'export': exportBackup(); break;
+    case 'sync-now': sync(true); break;
+    case 'sync-invite': shareInvite(); break;
+    case 'sync-copy': {
+      const t = $('#invite-text');
+      try { await navigator.clipboard.writeText(t.value); toast('Kopiert ✓'); } catch { t.select(); document.execCommand('copy'); toast('Kopiert ✓'); }
+      break;
+    }
+    case 'sync-leave':
+      if (!confirm('Dieses Gerät vom Familien-Rezeptbuch trennen? Die Rezepte bleiben auf dem Gerät, werden aber nicht mehr abgeglichen.')) return;
+      Sync.cfg = null; LS.set('sync', null);
+      for (const r of state.recipes) if (r.synced) { r.synced = false; await saveRecipe(r, { quiet: true }); }
+      LS.set('pendingDeletes', []);
+      render();
+      toast('Getrennt');
+      break;
   }
 });
 $('#zoom').addEventListener('click', (e) => { if (e.target.id === 'zoom' || e.target.classList.contains('zwrap')) closeZoom(); });
@@ -1249,6 +1282,22 @@ document.addEventListener('submit', async (e) => {
     saveCategories();
     $('#cat-editor').innerHTML = catEditor();
     $(`[data-cat="${CSS.escape(c.id)}"] .add input`)?.focus();
+  } else if (a === 'sync-connect' || a === 'sync-join') {
+    let cfg;
+    if (a === 'sync-join') cfg = decodeInvite(f.elements.code.value);
+    else cfg = { repo: f.elements.repo.value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\/$/, ''), token: f.elements.token.value.trim() };
+    if (!cfg || !/^[\w.-]+\/[\w.-]+$/.test(cfg.repo) || cfg.token.length < 20) { toast(a === 'sync-join' ? 'Der Einladungscode ist ungültig' : 'Bitte Namen und Schlüssel prüfen'); return; }
+    const btn = f.querySelector('button[type=submit]');
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Wird verbunden…';
+    try {
+      await connectSync(cfg);
+      toast('Verbunden ✓ Rezepte werden abgeglichen…');
+      if (location.hash.startsWith('#/verbinden')) location.replace('#/'); else render();
+      sync(true);
+    } catch (err) {
+      toast('Verbinden fehlgeschlagen: ' + err.message);
+      btn.disabled = false; btn.textContent = 'Verbinden';
+    }
   } else if (a === 'save') {
     const r = recById(f.dataset.id);
     const fd = new FormData(f);
@@ -1323,12 +1372,311 @@ async function importBackup(file) {
   }
 }
 
+
+/* =========================================================
+   Familien-Rezeptbuch: Abgleich aller Geräte über ein
+   privates GitHub-Repository (kostenlos)
+   Aufbau im Repository:
+     rezepte.json            – Liste aller Rezepte (ohne Bilder)
+     bilder/<id>/p0.jpg …    – eingescannte Seiten
+     bilder/<id>/thumb.jpg   – Vorschaubild
+   ========================================================= */
+const Sync = { cfg: LS.get('sync', null), busy: false, again: false, timer: null, error: null, progress: '', last: LS.get('syncLast', 0) };
+const syncApi = () => LS.get('syncApi', 'https://api.github.com');
+const repoPath = () => '/repos/' + Sync.cfg.repo;
+const SYNC_META = ['id', 'title', 'cats', 'subs', 'text', 'tags', 'manualCats', 'manualTitle', 'created', 'updated', 'imgv', 'ingredients', 'steps', 'notes', 'image'];
+
+async function gh(path, { method = 'GET', body, raw = false, cfg = Sync.cfg } = {}) {
+  let res;
+  try {
+    res = await fetch(syncApi() + path, {
+      method, cache: 'no-store',
+      headers: {
+        Authorization: 'Bearer ' + cfg.token,
+        Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    const e = new Error('Keine Internetverbindung'); e.offline = true; throw e;
+  }
+  if (!res.ok) {
+    const msg = { 401: 'Der Schlüssel ist ungültig oder abgelaufen', 403: 'Der Schlüssel hat keine Berechtigung für das Rezeptbuch', 404: 'Rezeptbuch nicht gefunden – Name oder Schlüssel prüfen' }[res.status] || 'GitHub-Fehler ' + res.status;
+    const e = new Error(msg); e.status = res.status; throw e;
+  }
+  if (raw) return res;
+  return res.status === 204 ? null : res.json();
+}
+const encodeInvite = (cfg) => 'REZEPTE-' + btoa(unescape(encodeURIComponent(JSON.stringify({ r: cfg.repo, k: cfg.token })))).replace(/=+$/, '');
+function decodeInvite(code) {
+  try {
+    const c = String(code || '').replace(/\s+/g, '').replace(/^.*REZEPTE-/, '');
+    const o = JSON.parse(decodeURIComponent(escape(atob(c))));
+    return o.r && o.k ? { repo: o.r, token: o.k } : null;
+  } catch { return null; }
+}
+async function connectSync(cfg) {
+  const repo = await gh('/repos/' + cfg.repo, { cfg });
+  if (repo.permissions && repo.permissions.push === false) throw new Error('Der Schlüssel darf nichts speichern (Berechtigung „Contents: Read and write“ fehlt)');
+  Sync.cfg = { repo: repo.full_name || cfg.repo, token: cfg.token, branch: repo.default_branch || 'main' };
+  LS.set('sync', Sync.cfg);
+  // Alles, was schon auf diesem Gerät ist, wird ins gemeinsame Rezeptbuch übernommen
+  for (const r of state.recipes) if (!r.synced) r.dirty = true;
+}
+function scheduleSync(delay = 1500) {
+  if (!Sync.cfg) return;
+  clearTimeout(Sync.timer);
+  Sync.timer = setTimeout(() => sync(), delay);
+}
+async function sync(manual = false) {
+  if (!Sync.cfg) return;
+  if (Sync.busy) { Sync.again = true; return; }
+  Sync.busy = true; Sync.error = null; Sync.progress = 'Wird abgeglichen…';
+  updateSyncUI();
+  try {
+    const local = state.recipes.some((r) => r.dirty || !r.synced) || LS.get('pendingDeletes', []).length || LS.get('catsDirty', false);
+    if (local) await pushChanges();
+    await pullRemote();
+    Sync.last = Date.now(); LS.set('syncLast', Sync.last);
+    if (manual) toast('Rezeptbuch ist auf dem neuesten Stand ✓');
+  } catch (err) {
+    console.error(err);
+    Sync.error = err.message;
+    if (manual || err.status === 401 || err.status === 403) toast('Abgleich fehlgeschlagen: ' + err.message);
+  } finally {
+    Sync.busy = false; Sync.progress = '';
+    updateSyncUI();
+    if (Sync.again) { Sync.again = false; scheduleSync(300); }
+  }
+}
+async function fetchRemote() {
+  try {
+    const res = await gh(`${repoPath()}/contents/rezepte.json`, { raw: true });
+    const data = await res.json();
+    return { recipes: [], ...data };
+  } catch (err) {
+    if (err.status === 404) return { version: 1, recipes: [] };
+    throw err;
+  }
+}
+const fetchRemoteBlob = async (path) => (await gh(`${repoPath()}/contents/${path}`, { raw: true })).blob();
+async function toBlob(x) { return typeof x === 'string' ? dataUrlToBlob(x) : x; }
+function blobToBase64(b) {
+  return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(b); });
+}
+async function getHead() {
+  const branch = Sync.cfg.branch || 'main';
+  try {
+    return { branch, sha: (await gh(`${repoPath()}/git/ref/heads/${branch}`)).object.sha };
+  } catch (err) {
+    if (err.status !== 409 && err.status !== 404) throw err;
+    // Leeres Repository: ersten Eintrag anlegen
+    await gh(`${repoPath()}/contents/README.md`, { method: 'PUT', body: { message: 'Familien-Rezeptbuch anlegen', content: btoa(unescape(encodeURIComponent('# Familien-Rezeptbuch\n\nHier speichert die App „Meine Rezepte“ die gemeinsamen Rezepte.\n'))) } });
+    return { branch, sha: (await gh(`${repoPath()}/git/ref/heads/${branch}`)).object.sha };
+  }
+}
+const blobShaCache = new Map();
+async function uploadBlob(key, blob) {
+  if (!blobShaCache.has(key)) {
+    const res = await gh(`${repoPath()}/git/blobs`, { method: 'POST', body: { content: await blobToBase64(blob), encoding: 'base64' } });
+    blobShaCache.set(key, res.sha);
+  }
+  return blobShaCache.get(key);
+}
+async function pushChanges() {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const head = await getHead();
+    const commit = await gh(`${repoPath()}/git/commits/${head.sha}`);
+    const remote = await fetchRemote();
+    const map = new Map(remote.recipes.map((m) => [m.id, m]));
+    const tree = [];
+    const dirty = state.recipes.filter((r) => r.dirty || !r.synced);
+    const deletes = LS.get('pendingDeletes', []);
+    const done = [];
+    let n = 0;
+    for (const r of dirty) {
+      const prev = map.get(r.id);
+      if (prev && (prev.updated || 0) > (r.updated || 0)) continue; // dort ist eine neuere Fassung
+      const meta = {};
+      for (const k of SYNC_META) if (r[k] !== undefined && r[k] !== null && r[k] !== '') meta[k] = r[k];
+      if (typeof meta.image === 'string' && meta.image.length > 200000) delete meta.image;
+      meta.pageCount = (r.pages || []).length;
+      meta.imgv = r.imgv || r.created || 1;
+      const imagesChanged = !prev || prev.imgv !== meta.imgv;
+      if (imagesChanged && meta.pageCount) {
+        Sync.progress = `Lade hoch: ${++n} von ${dirty.length}`; updateSyncUI();
+        for (let i = 0; i < r.pages.length; i++) {
+          tree.push({ path: `bilder/${r.id}/p${i}.jpg`, mode: '100644', type: 'blob', sha: await uploadBlob(`${r.id}:${meta.imgv}:p${i}`, await toBlob(r.pages[i])) });
+        }
+        if (r.thumb) tree.push({ path: `bilder/${r.id}/thumb.jpg`, mode: '100644', type: 'blob', sha: await uploadBlob(`${r.id}:${meta.imgv}:t`, await toBlob(r.thumb)) });
+      }
+      if (prev && imagesChanged) {
+        for (let i = meta.pageCount; i < (prev.pageCount || 0); i++) tree.push({ path: `bilder/${r.id}/p${i}.jpg`, mode: '100644', type: 'blob', sha: null });
+        if (prev.pageCount && !meta.pageCount) tree.push({ path: `bilder/${r.id}/thumb.jpg`, mode: '100644', type: 'blob', sha: null });
+      }
+      map.set(r.id, meta);
+      done.push(r);
+    }
+    for (const id of deletes) {
+      const prev = map.get(id);
+      if (!prev) continue;
+      map.delete(id);
+      for (let i = 0; i < (prev.pageCount || 0); i++) tree.push({ path: `bilder/${id}/p${i}.jpg`, mode: '100644', type: 'blob', sha: null });
+      if (prev.pageCount) tree.push({ path: `bilder/${id}/thumb.jpg`, mode: '100644', type: 'blob', sha: null });
+    }
+    const catsDirty = LS.get('catsDirty', false);
+    if (catsDirty || !remote.categories) { remote.categories = state.categories; remote.catsUpdated = LS.get('catsUpdated', 0) || Date.now(); }
+    remote.version = 1;
+    remote.updated = Date.now();
+    remote.recipes = [...map.values()].sort((a, b) => (a.created || 0) - (b.created || 0));
+    tree.push({ path: 'rezepte.json', mode: '100644', type: 'blob', content: JSON.stringify(remote, null, 1) });
+    const newTree = await gh(`${repoPath()}/git/trees`, { method: 'POST', body: { base_tree: commit.tree.sha, tree } });
+    const msg = done.length === 1 ? `Rezept: ${done[0].title}` : `${done.length} Rezepte aktualisiert`;
+    const newCommit = await gh(`${repoPath()}/git/commits`, { method: 'POST', body: { message: msg, tree: newTree.sha, parents: [head.sha] } });
+    try {
+      await gh(`${repoPath()}/git/refs/heads/${head.branch}`, { method: 'PATCH', body: { sha: newCommit.sha } });
+    } catch (err) {
+      if (err.status === 422 || err.status === 409) continue; // ein anderes Gerät war schneller – neu versuchen
+      throw err;
+    }
+    for (const r of done) {
+      const cur = recById(r.id);
+      if (!cur) continue;
+      cur.synced = true;
+      if (cur.updated === r.updated) cur.dirty = false;
+      await saveRecipe(cur, { quiet: true });
+    }
+    // Rezepte, bei denen die Fassung im Rezeptbuch neuer war, werden gleich danach übernommen
+    for (const r of dirty) if (!done.includes(r)) { r.dirty = false; r.synced = true; await saveRecipe(r, { quiet: true }); }
+    LS.set('pendingDeletes', LS.get('pendingDeletes', []).filter((id) => !deletes.includes(id)));
+    if (catsDirty) LS.set('catsDirty', false);
+    LS.set('catsUpdated', remote.catsUpdated);
+    return;
+  }
+  throw new Error('Gerade speichern mehrere Geräte gleichzeitig – bitte gleich noch einmal versuchen');
+}
+async function pullRemote() {
+  const remote = await fetchRemote();
+  const ids = new Set(remote.recipes.map((m) => m.id));
+  const pendingDel = new Set(LS.get('pendingDeletes', []));
+  let changed = false;
+  for (const l of [...state.recipes]) {
+    if (l.synced && !l.dirty && !ids.has(l.id)) { await deleteRecipe(l.id, { remote: true }); changed = true; } // woanders gelöscht
+  }
+  const todo = remote.recipes.filter((m) => {
+    if (pendingDel.has(m.id)) return false;
+    const l = recById(m.id);
+    if (l && l.dirty) return false;
+    return !l || !l.synced || (m.updated || 0) > (l.updated || 0) || (m.imgv || 0) !== (l.imgv || 0);
+  });
+  let n = 0;
+  for (const m of todo) {
+    const l = recById(m.id);
+    const sameImages = l && (l.imgv || 0) === (m.imgv || 0) && (l.pages || []).length === (m.pageCount || 0);
+    let pages = sameImages ? l.pages : [], thumb = sameImages ? l.thumb : null;
+    if (!sameImages && m.pageCount) {
+      Sync.progress = `Neue Rezepte werden geladen: ${++n} von ${todo.length}`; updateSyncUI();
+      for (let i = 0; i < m.pageCount; i++) pages.push(await fetchRemoteBlob(`bilder/${m.id}/p${i}.jpg`));
+      try { thumb = await fetchRemoteBlob(`bilder/${m.id}/thumb.jpg`); } catch { thumb = null; }
+      dropUrls(m.id);
+    }
+    const r = { ...m, pages, thumb, fav: l ? !!l.fav : false, synced: true, dirty: false };
+    delete r.pageCount;
+    await saveRecipe(r, { remote: true });
+    changed = true;
+  }
+  if (remote.categories && (remote.catsUpdated || 0) > LS.get('catsUpdated', 0) && !LS.get('catsDirty', false)) {
+    state.categories = remote.categories;
+    if (!catById('sonstiges')) state.categories.push({ id: 'sonstiges', name: 'Noch nicht zugeordnet', emoji: '📄', subs: [] });
+    LS.set('categories', state.categories);
+    LS.set('catsUpdated', remote.catsUpdated);
+    changed = true;
+  }
+  if (changed) {
+    const h = location.hash;
+    if (!/^#\/(bearbeiten|neu|einstellungen)/.test(h)) { render.keepScroll = true; render(); }
+  }
+}
+function ago(t) {
+  if (!t) return 'noch nie';
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return 'gerade eben';
+  if (m < 60) return `vor ${m} Min.`;
+  const h = Math.round(m / 60);
+  return h < 24 ? `vor ${h} Std.` : `am ${fmtDate(t)}`;
+}
+function syncLine() {
+  if (Sync.busy) return `<span class="spin"></span> ${esc(Sync.progress || 'Wird abgeglichen…')}`;
+  if (Sync.error) return `⚠️ Familien-Rezeptbuch: ${esc(Sync.error)}`;
+  return `👨‍👩‍👧 Familien-Rezeptbuch · abgeglichen ${ago(Sync.last)}`;
+}
+function syncCard() {
+  if (Sync.cfg) {
+    return `<p style="margin-top:0">✅ Verbunden mit <b>${esc(Sync.cfg.repo)}</b></p>
+      <p class="muted" id="sync-status" style="font-size:.9rem">${syncLine()}</p>
+      <p class="muted" style="font-size:.9rem">Alle verbundenen Geräte haben dieselben Rezepte. Neue Scans, Änderungen und Löschungen werden automatisch abgeglichen. Favoriten bleiben bei jedem persönlich.</p>
+      <div class="btn-row">
+        <button class="btn primary" data-action="sync-invite">📨 Familie einladen</button>
+        <button class="btn" data-action="sync-now">🔄 Jetzt abgleichen</button>
+      </div>
+      <div id="invite-box"></div>
+      <p style="margin-bottom:0"><button class="btn danger" data-action="sync-leave" style="padding:8px 14px;font-size:.9rem">Dieses Gerät trennen</button></p>`;
+  }
+  const owner = /^([\w-]+)\.github\.io$/i.test(location.hostname) ? location.hostname.split('.')[0] : '';
+  return `<p style="margin-top:0" class="muted">Damit alle in der Familie dieselben Rezepte haben, werden sie in einem privaten Speicher bei GitHub abgelegt – kostenlos und nur für euch sichtbar.</p>
+    <form class="form" data-action="sync-join" style="gap:10px">
+      <div class="field"><label for="f-code">Ich habe einen Einladungscode</label>
+        <textarea id="f-code" name="code" rows="2" style="min-height:64px" placeholder="REZEPTE-…" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea></div>
+      <button class="btn primary" type="submit">Verbinden</button>
+    </form>
+    <details style="margin-top:16px">
+      <summary><b>Ich richte das Rezeptbuch ein</b> <span class="muted">(nur einmal nötig)</span></summary>
+      <form class="form" data-action="sync-connect" style="gap:10px;margin-top:12px">
+        <div class="field"><label for="f-repo">Name des Speichers</label>
+          <input type="text" id="f-repo" name="repo" value="${esc(owner ? owner + '/Essenapp-Rezepte' : '')}" placeholder="benutzername/Essenapp-Rezepte" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+        <div class="field"><label for="f-token">Schlüssel <span class="hint">(beginnt mit „github_pat_“)</span></label>
+          <input type="text" id="f-token" name="token" placeholder="github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+        <button class="btn primary" type="submit">Verbinden</button>
+      </form>
+    </details>`;
+}
+function updateSyncUI() {
+  const l = $('#sync-line'); if (l) l.innerHTML = syncLine();
+  const s = $('#sync-status'); if (s) s.innerHTML = syncLine();
+}
+function inviteText() {
+  return `Hallo! Hier ist unser Familien-Rezeptbuch 🍳\n\n1. Diesen Link öffnen: ${BASE}\n2. Am iPhone/iPad: Teilen → „Zum Home-Bildschirm“ (Android: Menü ⋮ → „App installieren“)\n3. Die App öffnen → ⚙️ Mehr → Familien-Rezeptbuch → diesen Einladungscode einfügen:\n\n${encodeInvite(Sync.cfg)}\n\nBitte den Code nicht weitergeben – damit kann man die Rezepte ändern.`;
+}
+async function shareInvite() {
+  const text = inviteText();
+  if (navigator.share) {
+    try { await navigator.share({ title: 'Familien-Rezeptbuch', text }); return; } catch (err) { if (err && err.name === 'AbortError') return; }
+  }
+  $('#invite-box').innerHTML = `<div class="field" style="margin-top:12px"><label for="invite-text">Diesen Text an die Familie schicken:</label>
+    <textarea id="invite-text" rows="9" readonly>${esc(text)}</textarea></div>
+    <button class="btn" data-action="sync-copy">📋 Kopieren</button>`;
+}
+function viewJoin(code) {
+  setTab('settings');
+  topbar({ title: 'Familien-Rezeptbuch', back: '#/' });
+  const cfg = decodeInvite(code);
+  if (!cfg) return '<div class="empty"><span class="big">🤔</span>Der Einladungslink ist unvollständig.</div>';
+  return `<div class="card" style="text-align:center"><div style="font-size:3rem">👨‍👩‍👧</div>
+    <h2 style="margin:6px 0">Familien-Rezeptbuch beitreten</h2>
+    <p class="muted">Danach hast du auf diesem Gerät alle Rezepte der Familie – und deine eigenen Scans sehen die anderen auch.</p>
+    <form data-action="sync-join"><input type="hidden" name="code" value="${esc(code)}"><button class="btn primary" type="submit">Jetzt verbinden</button></form></div>`;
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleSync(300); });
+window.addEventListener('online', () => scheduleSync(300));
+setInterval(() => { if (!document.hidden) sync(); }, 120000);
+
 // ---------- Start ----------
 const OLD_EXAMPLES = ['Zwetschgendatschi vom Blech', 'Lachs mit Kräuterkruste', 'Tomaten-Bruschetta', 'Schoko-Muffins', 'Tiramisu'];
 async function init() {
   state.categories = LS.get('categories', null) || buildDefaultCategories();
   if (!catById('sonstiges')) state.categories.push({ id: 'sonstiges', name: 'Noch nicht zugeordnet', emoji: '📄', subs: [] });
-  saveCategories();
+  LS.set('categories', state.categories);
   try {
     state.recipes = await DB.all();
   } catch (err) {
@@ -1352,5 +1700,6 @@ async function init() {
   try { sessionStorage.removeItem('repair'); } catch { /* */ }
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
+  sync();
 }
 init();

@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=5">
+  <link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
   <header class="topbar" id="topbar"></header>
@@ -32,7 +32,7 @@
   <script>
     // Notfall-Hilfe: Wenn die App nicht startet (z. B. alte Dateien im Zwischenspeicher),
     // einmal alles Zwischengespeicherte löschen und neu laden. Die Rezepte bleiben erhalten.
-    window.APP_VERSION = 5;
+    window.APP_VERSION = 6;
     window.addEventListener('error', function () { setTimeout(repair, 300); });
     setTimeout(function () { if (!window.APP_STARTED) repair(); }, 6000);
     function repair() {
@@ -49,6 +49,6 @@
       Promise.all(jobs).catch(function () {}).then(function () { location.reload(); });
     }
   </script>
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>

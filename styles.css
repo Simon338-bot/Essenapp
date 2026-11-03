@@ -434,3 +434,5 @@ details.ocr .notes { margin-top: 12px; font-size: .9rem; color: var(--muted); }
 .zoom .zclose { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 10px); right: 12px; z-index: 2; }
 .searchbox input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
 .job.skip { opacity: .6; }
+.sync-line { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: .85rem; color: var(--muted); padding: 0 4px; }
+#invite-text { font-size: .85rem; }

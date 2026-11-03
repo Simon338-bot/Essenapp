@@ -1,6 +1,6 @@
 // Service Worker: App offline verfügbar machen
-const CACHE = 'rezepte-v5';
-const ASSETS = ['./', 'index.html', 'styles.css?v=5', 'app.js?v=5', 'manifest.webmanifest',
+const CACHE = 'rezepte-v6';
+const ASSETS = ['./', 'index.html', 'styles.css?v=6', 'app.js?v=6', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png'];
 
 self.addEventListener('install', (e) => {
