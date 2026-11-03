@@ -1284,7 +1284,14 @@ document.addEventListener('submit', async (e) => {
     $(`[data-cat="${CSS.escape(c.id)}"] .add input`)?.focus();
   } else if (a === 'sync-connect' || a === 'sync-join') {
     let cfg;
-    if (a === 'sync-join') cfg = decodeInvite(f.elements.code.value);
+    if (a === 'sync-join') {
+      const v = f.elements.code.value.trim();
+      // Wurde statt eines Einladungscodes direkt ein GitHub-Schlüssel eingefügt? Dann den Standard-Speicher nehmen.
+      if (/^(github_pat_|ghp_)/.test(v)) {
+        const owner = /^([\w-]+)\.github\.io$/i.test(location.hostname) ? location.hostname.split('.')[0] : '';
+        cfg = owner ? { repo: owner + '/Essenapp-Rezepte', token: v } : null;
+      } else cfg = decodeInvite(v);
+    }
     else cfg = { repo: f.elements.repo.value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\/$/, ''), token: f.elements.token.value.trim() };
     if (!cfg || !/^[\w.-]+\/[\w.-]+$/.test(cfg.repo) || cfg.token.length < 20) { toast(a === 'sync-join' ? 'Der Einladungscode ist ungültig' : 'Bitte Namen und Schlüssel prüfen'); return; }
     const btn = f.querySelector('button[type=submit]');
@@ -1626,7 +1633,7 @@ function syncCard() {
   const owner = /^([\w-]+)\.github\.io$/i.test(location.hostname) ? location.hostname.split('.')[0] : '';
   return `<p style="margin-top:0" class="muted">Damit alle in der Familie dieselben Rezepte haben, werden sie in einem privaten Speicher bei GitHub abgelegt – kostenlos und nur für euch sichtbar.</p>
     <form class="form" data-action="sync-join" style="gap:10px">
-      <div class="field"><label for="f-code">Ich habe einen Einladungscode</label>
+      <div class="field"><label for="f-code">Einladungscode oder Schlüssel einfügen</label>
         <textarea id="f-code" name="code" rows="2" style="min-height:64px" placeholder="REZEPTE-…" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea></div>
       <button class="btn primary" type="submit">Verbinden</button>
     </form>
