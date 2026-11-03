@@ -99,9 +99,28 @@ const subById = (cat, sid) => cat && cat.subs.find((s) => s.id === sid);
 const recById = (id) => state.recipes.find((r) => r.id === id);
 
 // remote: Daten kommen aus dem Familien-Rezeptbuch · quiet: nur lokal (z. B. Favorit)
+// Bilder werden als ArrayBuffer gespeichert – Blobs in IndexedDB gehen in Safari manchmal kaputt
+async function packImg(x) {
+  if (x instanceof Blob) {
+    try { return { __img: await x.arrayBuffer(), type: 'image/jpeg' }; } catch { return null; }
+  }
+  return x;
+}
+function unpackImg(x) {
+  if (x && x.__img) return new Blob([x.__img], { type: x.type || 'image/jpeg' });
+  return x;
+}
+async function packRecipe(r) {
+  const pages = [];
+  for (const pg of r.pages || []) pages.push(await packImg(pg));
+  return { ...r, pages, thumb: await packImg(r.thumb) };
+}
+function unpackRecipe(r) {
+  return { ...r, pages: (r.pages || []).map(unpackImg), thumb: unpackImg(r.thumb) };
+}
 async function saveRecipe(r, { remote = false, quiet = false } = {}) {
   if (!remote && !quiet) { r.updated = Date.now(); r.dirty = true; }
-  await DB.put(r);
+  await DB.put(await packRecipe(r));
   const i = state.recipes.findIndex((x) => x.id === r.id);
   if (i >= 0) state.recipes[i] = r; else state.recipes.push(r);
   delete searchCache[r.id];
@@ -163,7 +182,7 @@ const ANIMAL = { milch: 1, sahne: 1, butter: 1, kase: 1, quark: 1, joghurt: 1, '
 
 const RULES = {
   kuchen: {
-    kw: { kuchen: 5, brownie: 5, 'torte$': 5, '=torten': 5, springform: 4, tortenboden: 4, biskuit: 3, gugelhupf: 5, napfkuchen: 5, kastenform: 3, muffin: 5, cupcake: 5, '^tarte': 4, streusel: 2, tortenguss: 4, zuckerguss: 2, kuvertur: 1, backblech: 1 },
+    kw: { kuchen: 5, brownie: 5, cheesecake: 6, 'torte$': 5, '=torten': 5, springform: 4, tortenboden: 4, biskuit: 3, gugelhupf: 5, napfkuchen: 5, kastenform: 3, muffin: 5, cupcake: 5, '^tarte': 4, streusel: 2, tortenguss: 4, zuckerguss: 2, kuvertur: 1, backblech: 1 },
     subs: {
       blechkuchen: { blechkuchen: 6, '^blech': 4, backblech: 3, fettpfanne: 3, 'vom blech': 4, 'auf dem blech': 4, tassenkuchen: 5, brownie: 3, 'frau holle': 6, 'donauwelle': 6, 'bienenstich': 3, 'butterkuchen': 6, 'zuckerkuchen': 6, 'streuselkuchen': 4 },
       torten: { 'torte$': 5, '=torten': 5, sahnetorte: 6, tortenring: 4, tortenboden: 3, biskuit: 4, 'steif schlagen': 3, 'steif geschlagen': 3, buttercreme: 4, fullung: 2, '^schicht': 2, waagerecht: 3, 'boden halbieren': 4, 'einmal durchschneiden': 4, sahnesteif: 3 },
@@ -181,7 +200,7 @@ const RULES = {
     },
   },
   gebaeck: {
-    kw: { platzchen: 6, '^keks': 5, kekse: 5, ausstech: 5, vanillekipferl: 6, kipferl: 5, lebkuchen: 5, stollen: 4, makrone: 5, spritzgeback: 6, zimtstern: 6, hefezopf: 5, '^zopf': 3, brezel: 3, schnecken: 3, plunder: 4, croissant: 3, '^berliner': 3, krapfen: 4, cookie: 5, geback: 4, spekulatius: 5, florentiner: 5 },
+    kw: { platzchen: 6, '^keks': 3, '=kekse': 2, ausstech: 5, vanillekipferl: 6, kipferl: 5, lebkuchen: 5, stollen: 4, makrone: 5, spritzgeback: 6, zimtstern: 6, hefezopf: 5, '^zopf': 3, brezel: 3, schnecken: 3, plunder: 4, croissant: 3, '^berliner': 3, krapfen: 4, cookie: 5, geback: 4, spekulatius: 5, florentiner: 5 },
     subs: {
       weihnachtsplatzchen: { weihnacht: 4, platzchen: 3, zimtstern: 5, vanillekipferl: 5, lebkuchen: 4, spekulatius: 5, advent: 3, stollen: 4 },
       kekse: { '^keks': 5, kekse: 5, cookie: 5 },
@@ -264,7 +283,7 @@ const RULES = {
   },
 };
 
-const CLASSIFIER_VERSION = 3; // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
+const CLASSIFIER_VERSION = 4; // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
 const kwCache = new Map();
 function kwRegex(k) {
   if (!kwCache.has(k)) {
@@ -379,13 +398,27 @@ function classify(text, title) {
 
 // ---------- Titel aus dem erkannten Text bestimmen ----------
 const NOT_TITLE = /^(zutaten|zubereitung|fur\s|für\s|menge|portion|personen|rezept\b|seite\s|zubereitungszeit|backzeit|tipp)/i;
+// Titel-Kandidaten bewerten: große Schrift, dicke (fette) Buchstaben und Position weit oben zählen
+function titleCands(lines) {
+  const median = (arr) => { const a = arr.filter((x) => x > 0).sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
+  const medH = median(lines.map((l) => l.h || 0)) || 1;
+  const medInk = median(lines.map((l) => l.ink || 0));
+  return lines.slice(0, 15)
+    .map((l, i) => ({ ...l, i, text: cleanTitle(l.text) }))
+    .filter((l) => (l.text.match(/[a-zäöüß]/gi) || []).length >= 4 && !NOT_TITLE.test(l.text) && !/^\d/.test(l.text) && l.text.length <= 80)
+    .map((c) => {
+      const size = Math.min(4, (c.h || 0) / medH);                          // wie viel größer als normaler Text
+      const bold = c.ink && medInk ? Math.min(2.5, c.ink / medInk) : 1;      // wie fett gedruckt
+      const top = c.y != null ? 1 - Math.min(1, c.y / 0.6) : 1 - c.i / 15;  // je weiter oben, desto besser
+      const words = c.text.split(/\s+/).length;
+      c.score = size * 1.6 + bold * 0.8 + top * 1.5 - (words > 8 ? 1 : 0) - ((c.conf != null && c.conf < 40) ? 0.8 : 0);
+      return c;
+    })
+    .sort((a, b) => b.score - a.score || a.i - b.i);
+}
 function titleIndex(lines) {
-  const cands = lines.slice(0, 8)
-    .map((l, i) => ({ h: l.h || 0, i, text: cleanTitle(l.text) }))
-    .filter((l) => (l.text.match(/[a-zäöüß]/gi) || []).length >= 4 && !NOT_TITLE.test(l.text) && !/^\d/.test(l.text));
-  if (!cands.length) return -1;
-  const maxH = Math.max(...cands.map((c) => c.h));
-  return (cands.find((c) => c.h >= maxH * 0.85) || cands[0]).i;
+  const c = titleCands(lines);
+  return c.length ? c[0].i : -1;
 }
 function pickTitle(lines, fallback) {
   const info = pickTitleInfo(lines);
@@ -393,14 +426,12 @@ function pickTitle(lines, fallback) {
 }
 function pickTitleInfo(lines) {
   // lines: [{text, h, conf}] in Lesereihenfolge
-  const cands = lines.slice(0, 8)
-    .map((l, i) => ({ ...l, i, text: cleanTitle(l.text) }))
-    .filter((l) => (l.text.match(/[a-zäöüß]/gi) || []).length >= 4 && !NOT_TITLE.test(l.text) && !/^\d/.test(l.text));
+  const cands = titleCands(lines);
   if (!cands.length) return null;
-  const maxH = Math.max(...cands.map((c) => c.h || 0));
-  const best = { ...(cands.find((c) => (c.h || 0) >= maxH * 0.85) || cands[0]) };
+  const best = { ...cands[0] };
+  // Überschrift über zwei Zeilen (gleich groß, direkt darunter)?
   const next = cands.find((c) => c.i === best.i + 1);
-  if (next && best.h && next.h >= best.h * 0.85 && (best.text + next.text).length <= 60) {
+  if (next && best.h && next.h >= best.h * 0.85 && next.h <= best.h * 1.2 && (best.text + next.text).length <= 60) {
     best.text += ' ' + next.text;
     if (next.conf != null && best.conf != null) best.conf = Math.min(best.conf, next.conf);
   }
@@ -683,6 +714,27 @@ function enhanceForOcr(src) {
   ctx.putImageData(img, 0, 0);
   return c;
 }
+// Für jede Zeile: Position auf der Seite (0 = oben) und wie „fett“ sie gedruckt ist (Anteil dunkler Pixel)
+function measureLines(src, lines) {
+  try {
+    const W = src.width, H = src.height;
+    const d = src.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+    for (const l of lines) {
+      const b = l.bbox;
+      if (!b) continue;
+      l.y = b.y0 / H;
+      // Strichdicke: dunkle Pixel im Verhältnis zur Zeilenhöhe – große Schrift zählt dadurch nicht doppelt
+      let dark = 0, n = 0;
+      const step = Math.max(1, Math.round((b.y1 - b.y0) / 25));
+      for (let y = b.y0; y < b.y1; y += step) for (let x = b.x0; x < b.x1; x += step) {
+        const i = (y * W + x) * 4;
+        if (d[i] + d[i + 1] + d[i + 2] < 360) dark++;
+        n++;
+      }
+      l.ink = n ? dark / n : 0;
+    }
+  } catch (err) { console.warn(err); }
+}
 // Eine einzelne Zeile (die Überschrift) vergrößert noch einmal lesen
 async function rereadLine(worker, src, bb) {
   const lh = bb.y1 - bb.y0;
@@ -705,12 +757,108 @@ async function rereadLine(worker, src, bb) {
     await worker.setParameters({ tessedit_pageseg_mode: '3' });
   }
 }
+/* ---------- Lesefehler korrigieren ----------
+   Wörter, bei denen die Texterkennung unsicher war, werden mit einem Koch-Wörterbuch verglichen:
+   typische Verwechslungen (rn↔m, c↔e, li↔h …), ein falscher/fehlender Buchstabe, zusammengesetzte Wörter. */
+let VOC = null;
+function vocab() {
+  if (!VOC) {
+    const orig = new Map();
+    const add = (w) => { const n = norm(w); if (n.length >= 3 && !orig.has(n)) orig.set(n, w.toLowerCase()); };
+    for (const w of window.RECIPE_VOCAB || []) add(w);
+    for (const c of state.categories) { c.name.split(/[^\p{L}]+/u).forEach(add); c.subs.forEach((x) => x.name.split(/[^\p{L}]+/u).forEach(add)); }
+    VOC = { orig, list: [...orig.keys()], stems: new Set([...orig.keys()].map(stem)) };
+  }
+  return VOC;
+}
+const OCR_SWAPS = [['rn', 'm'], ['m', 'rn'], ['cl', 'd'], ['li', 'h'], ['ii', 'u'], ['c', 'e'], ['e', 'c'], ['n', 'u'], ['u', 'n'], ['0', 'o'],
+  ['1', 'l'], ['l', 'i'], ['i', 'l'], ['vv', 'w'], ['f', 't'], ['t', 'f'], ['h', 'b'], ['b', 'h'], ['a', 'e'], ['o', 'e'], ['s', 'e'], ['ri', 'n'], ['in', 'm']];
+function vocabHas(n) { const v = vocab(); return v.orig.has(n) || v.stems.has(stem(n)); }
+function vocabCompound(n) {
+  for (let i = 3; i <= n.length - 3; i++) {
+    const a = n.slice(0, i), b = n.slice(i);
+    if ((vocabHas(a) || vocabHas(a.replace(/s$/, '')) || vocabHas(a.replace(/n$/, ''))) && vocabHas(b)) return [a, b];
+  }
+  return null;
+}
+const isKnownWord = (n) => vocabHas(n) || !!vocabCompound(n);
+function closestVocab(n) {
+  const max = n.length >= 9 ? 2 : 1;
+  let best = null, bd = max + 1, ties = 0;
+  for (const v of vocab().list) {
+    if (Math.abs(v.length - n.length) > max || v[0] !== n[0] && max === 1 && n.length < 6) continue;
+    const d = lev(n, v, max);
+    if (d < bd) { bd = d; best = v; ties = 0; } else if (d === bd && v !== best) ties++;
+  }
+  return best && bd <= max && !ties ? best : null;
+}
+function correctNorm(n) {
+  if (n.length < 4 || isKnownWord(n)) return null;
+  for (const [a, b] of OCR_SWAPS) {
+    for (let idx = n.indexOf(a); idx >= 0; idx = n.indexOf(a, idx + 1)) {
+      const cand = n.slice(0, idx) + b + n.slice(idx + a.length);
+      if (isKnownWord(cand)) return cand;
+    }
+  }
+  const c = closestVocab(n);
+  if (c) return c;
+  for (let i = 3; i <= n.length - 4; i++) {
+    const a = n.slice(0, i), b = n.slice(i);
+    if (vocabHas(a) || vocabHas(a.replace(/s$/, ''))) { const cb = closestVocab(b); if (cb && cb.length >= 4) return a + cb; }
+  }
+  return null;
+}
+// Normalisierte Korrektur wieder mit Umlauten und Groß-/Kleinschreibung versehen
+function restoreWord(cand, original) {
+  const v = vocab();
+  let out = v.orig.get(cand);
+  if (!out) {
+    const parts = vocabCompound(cand);
+    if (parts) out = (v.orig.get(parts[0]) || parts[0]) + (v.orig.get(parts[1]) || v.orig.get(stem(parts[1])) || parts[1]);
+  }
+  if (!out) {
+    const on = norm(original);
+    out = on.length === cand.length ? [...cand].map((ch, i) => (norm(original[i] || '') === ch ? original[i].toLowerCase() : ch)).join('') : cand;
+  }
+  if (/^\p{Lu}\p{Lu}+$/u.test(original)) return out.toUpperCase();
+  return /^\p{Lu}/u.test(original) ? out.charAt(0).toUpperCase() + out.slice(1) : out;
+}
+const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function correctOcr(data, text, lines) {
+  const fixes = new Map();
+  for (const wd of data.words || []) {
+    if (wd.confidence >= 85) continue;
+    const word = String(wd.text || '').replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '');
+    if (word.length < 4 || fixes.has(word) || /\d/.test(word)) continue;
+    for (const part of word.split('-')) {
+      if (part.length < 4 || fixes.has(part)) continue;
+      const c = correctNorm(norm(part));
+      if (c) fixes.set(part, restoreWord(c, part));
+    }
+  }
+  for (const [from, to] of fixes) {
+    if (from === to) continue;
+    const re = new RegExp(`(^|[^\\p{L}])${escRe(from)}(?=[^\\p{L}]|$)`, 'gu');
+    text = text.replace(re, `$1${to}`);
+    for (const l of lines) l.text = l.text.replace(re, `$1${to}`);
+  }
+  return text;
+}
 async function ocrCanvas(canvas, onPct) {
   ocrProgress = (m) => { if (m.status === 'recognizing text') onPct(Math.round(m.progress * 100)); else if (/load|init/.test(m.status)) onPct(-1); };
   const w = await getOcr();
-  const src = enhanceForOcr(canvas);
-  const { data } = await w.recognize(src);
+  let src = enhanceForOcr(canvas);
+  let { data } = await w.recognize(src);
+  // Schwer lesbar (z. B. ungewöhnliche Schrift)? Dann auch das Originalbild probieren und das Bessere nehmen
+  if ((data.confidence || 0) < 70) {
+    ocrProgress = () => {};
+    try {
+      const alt = (await w.recognize(canvas)).data;
+      if ((alt.confidence || 0) > (data.confidence || 0) + 2) { data = alt; src = canvas; }
+    } catch (err) { console.warn(err); }
+  }
   const lines = (data.lines || []).map((l) => ({ text: l.text.trim(), h: l.bbox ? l.bbox.y1 - l.bbox.y0 : 0, bbox: l.bbox, conf: l.confidence })).filter((l) => l.text);
+  measureLines(src, lines);
   let text = data.text || '';
   // Die Überschrift ist oft in Zierschrift – sie wird noch einmal vergrößert gelesen
   const ti = titleIndex(lines);
@@ -724,6 +872,7 @@ async function ocrCanvas(canvas, onPct) {
       }
     } catch (err) { console.warn(err); }
   }
+  try { text = correctOcr(data, text, lines); } catch (err) { console.warn(err); }
   return { text, lines, conf: data.confidence };
 }
 
@@ -1486,6 +1635,14 @@ document.addEventListener('click', async (e) => {
       break;
   }
 });
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement)) return;
+  const thumb = img.closest('.thumb');
+  if (thumb) { thumb.classList.remove('scan'); thumb.innerHTML = '<span title="Bild fehlt">📄</span>'; }
+  const fig = img.closest('.scan-page');
+  if (fig) fig.innerHTML = '<div class="empty" style="margin:0">📄 Das Bild konnte nicht geladen werden.<br>Bitte das Rezept neu einscannen.</div>';
+}, true);
 $('#zoom').addEventListener('click', (e) => { if (e.target.id === 'zoom' || e.target.classList.contains('zwrap')) closeZoom(); });
 $('#zoom').addEventListener('dblclick', (e) => { const img = e.target.closest('img'); if (img) img.classList.toggle('big'); });
 
@@ -1732,7 +1889,7 @@ async function fetchRemote() {
     throw err;
   }
 }
-const fetchRemoteBlob = async (path) => (await gh(`${repoPath()}/contents/${path}`, { raw: true })).blob();
+const fetchRemoteBlob = async (path) => new Blob([await (await gh(`${repoPath()}/contents/${path}`, { raw: true })).arrayBuffer()], { type: 'image/jpeg' });
 async function toBlob(x) { return typeof x === 'string' ? dataUrlToBlob(x) : x; }
 function blobToBase64(b) {
   return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(b); });
@@ -1840,12 +1997,12 @@ async function pullRemote() {
     if (pendingDel.has(m.id)) return false;
     const l = recById(m.id);
     if (l && l.dirty) return false;
-    return !l || !l.synced || (m.updated || 0) > (l.updated || 0) || (m.imgv || 0) !== (l.imgv || 0);
+    return !l || !l.synced || !l.imgv || (m.updated || 0) > (l.updated || 0) || (m.imgv || 0) !== (l.imgv || 0);
   });
   let n = 0;
   for (const m of todo) {
     const l = recById(m.id);
-    const sameImages = l && (l.imgv || 0) === (m.imgv || 0) && (l.pages || []).length === (m.pageCount || 0);
+    const sameImages = l && l.imgv && (l.imgv || 0) === (m.imgv || 0) && (l.pages || []).length === (m.pageCount || 0);
     let pages = sameImages ? l.pages : [], thumb = sameImages ? l.thumb : null;
     if (!sameImages && m.pageCount) {
       Sync.progress = `Neue Rezepte werden geladen: ${++n} von ${todo.length}`; updateSyncUI();
@@ -1950,7 +2107,25 @@ async function init() {
   if (!catById('sonstiges')) state.categories.push({ id: 'sonstiges', name: 'Noch nicht zugeordnet', emoji: '📄', subs: [] });
   LS.set('categories', state.categories);
   try {
-    state.recipes = await DB.all();
+    const stored = await DB.all();
+    state.recipes = stored.map(unpackRecipe);
+    // Ältere Speicherung (Blobs) umstellen und kaputte Bilder erkennen
+    for (let i = 0; i < stored.length; i++) {
+      const raw = stored[i], r = state.recipes[i];
+      const imgs = [...(raw.pages || []), raw.thumb].filter(Boolean);
+      if (!imgs.some((x) => x instanceof Blob)) continue;
+      let broken = false;
+      const fix = async (x) => {
+        if (!(x instanceof Blob)) return unpackImg(x);
+        try { return new Blob([await x.arrayBuffer()], { type: 'image/jpeg' }); } catch { broken = true; return null; }
+      };
+      const pages = [];
+      for (const pg of raw.pages || []) pages.push(await fix(pg));
+      const thumb = await fix(raw.thumb);
+      if (broken && r.synced) { r.pages = []; r.thumb = null; r.imgv = 0; } // wird gleich aus dem Familien-Rezeptbuch neu geladen
+      else { r.pages = pages.filter(Boolean); r.thumb = thumb || null; if (broken) r.imgBroken = true; }
+      await saveRecipe(r, { quiet: true });
+    }
   } catch (err) {
     toast('Speicher nicht verfügbar: ' + err.message);
   }
