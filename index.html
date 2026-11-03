@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
   <header class="topbar" id="topbar"></header>
@@ -29,6 +29,26 @@
   <div id="zoom" class="zoom" hidden></div>
   <div id="toast" class="toast" role="status"></div>
 
-  <script src="app.js"></script>
+  <script>
+    // Notfall-Hilfe: Wenn die App nicht startet (z. B. alte Dateien im Zwischenspeicher),
+    // einmal alles Zwischengespeicherte löschen und neu laden. Die Rezepte bleiben erhalten.
+    window.APP_VERSION = 4;
+    window.addEventListener('error', function () { setTimeout(repair, 300); });
+    setTimeout(function () { if (!window.APP_STARTED) repair(); }, 6000);
+    function repair() {
+      if (window.APP_STARTED) return;
+      var tried = 0;
+      try { tried = +sessionStorage.getItem('repair') || 0; sessionStorage.setItem('repair', tried + 1); } catch (e) {}
+      if (tried >= 2) {
+        document.getElementById('app').innerHTML = '<div style="padding:40px 10px;text-align:center">Die App konnte nicht geladen werden.<br><br><button onclick="location.reload()" style="padding:12px 20px;font-size:1rem;border-radius:12px;border:0;background:#c8553d;color:#fff">Neu laden</button></div>';
+        return;
+      }
+      var jobs = [];
+      if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }));
+      if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }));
+      Promise.all(jobs).catch(function () {}).then(function () { location.reload(); });
+    }
+  </script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

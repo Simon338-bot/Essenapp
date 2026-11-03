@@ -1327,6 +1327,8 @@ async function init() {
     LS.set('v2', true);
   }
   render();
+  window.APP_STARTED = true;
+  try { sessionStorage.removeItem('repair'); } catch { /* */ }
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
 }
