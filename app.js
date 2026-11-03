@@ -1477,7 +1477,8 @@ function viewRecipe(id) {
         <button class="btn" data-action="reread" data-id="${esc(r.id)}">🔤 Neu lesen</button>` : ''}
       <a class="btn" href="#/bearbeiten/${encodeURIComponent(r.id)}">✏️ Titel & Kategorie</a>
       <button class="btn danger" data-action="delete" data-id="${esc(r.id)}">🗑️ Löschen</button>
-    </div>`;
+    </div>
+    <p class="center" style="margin-top:18px"><button class="linkbtn" data-action="report" data-id="${esc(r.id)}">⚠️ Falsch erkannt? An die tägliche Prüfung melden</button></p>`;
 }
 
 function viewMerge(id) {
@@ -1622,6 +1623,12 @@ function viewSettings() {
         <button class="btn primary" data-action="export">⬇️ Sicherung herunterladen</button>
         <label class="btn">⬆️ Sicherung einlesen<input type="file" accept="application/json,.json" data-action="import" hidden></label>
       </div>
+    </div>
+
+    <div class="section-title">💬 Problem oder Wunsch melden</div>
+    <div class="card" style="margin-top:0">
+      <p style="margin-top:0" class="muted">Jeden Morgen prüft und verbessert Claude die App automatisch. Was du hier meldest, wird dabei bearbeitet. Du brauchst dafür dein GitHub-Konto. Achtung: Meldungen sind öffentlich sichtbar.</p>
+      <button class="btn" data-action="report">💬 Meldung schreiben</button>
     </div>
 
     <div class="section-title">ℹ️ Info</div>
@@ -1875,6 +1882,19 @@ document.addEventListener('click', async (e) => {
       toast('Kategorien zurückgesetzt');
       break;
     case 'export': exportBackup(); break;
+    case 'report': {
+      const owner = /^([\w-]+)\.github\.io$/i.test(location.hostname) ? location.hostname.split('.')[0] : 'Simon338-bot';
+      const r = id ? recById(id) : null;
+      const what = r ? prompt('Was stimmt nicht? (z. B. „Ist vegetarisch, nicht Fleisch“ oder „Titel müsste Frau Holle Kuchen heißen“)') : '';
+      if (r && what === null) break;
+      const catNames = r ? (r.cats || []).map((c) => catById(c)?.name).filter(Boolean).join(', ') + (recipeSubLabels(r).length ? ' › ' + recipeSubLabels(r).join(', ') : '') : '';
+      const title = r ? `Falsch erkannt: ${r.title}` : 'Meldung aus der App';
+      const body = r
+        ? `**Was stimmt nicht:** ${what || '(bitte ergänzen)'}\n\n**Titel in der App:** ${r.title}\n**Einsortiert unter:** ${catNames}\n**Seiten:** ${(r.pages || []).length}\n\n<details><summary>Erkannter Text</summary>\n\n\`\`\`\n${recipeText(r).slice(0, 2500)}\n\`\`\`\n</details>\n\n_App-Version ${window.APP_VERSION}_`
+        : `**Problem oder Wunsch:**\n\n\n_App-Version ${window.APP_VERSION}_`;
+      window.open(`https://github.com/${owner}/Essenapp/issues/new?labels=app-meldung&title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`, '_blank');
+      break;
+    }
     case 'sync-now': sync(true); break;
     case 'sync-invite': shareInvite(); break;
     case 'sync-copy': {
