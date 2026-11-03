@@ -153,9 +153,15 @@ const RULES = {
   kuchen: {
     kw: { kuchen: 5, torte: 5, springform: 4, tortenboden: 4, biskuit: 3, gugelhupf: 5, napfkuchen: 5, kastenform: 3, muffin: 5, cupcake: 5, '^tarte': 4, streusel: 2, tortenguss: 4, zuckerguss: 2, kuvertur: 1, backblech: 1 },
     subs: {
-      blechkuchen: { blechkuchen: 6, '^blech': 4, backblech: 3, fettpfanne: 3, 'vom blech': 4 },
-      torten: { torte: 5, sahnetorte: 6, tortenring: 4, tortenboden: 3 },
-      ruhrkuchen: { ruhrkuchen: 6, ruhrteig: 4, gugelhupf: 5, napfkuchen: 5, kastenform: 3, marmorkuchen: 6, kastenkuchen: 5, zitronenkuchen: 3 },
+      blechkuchen: { blechkuchen: 6, '^blech': 4, backblech: 3, fettpfanne: 3, 'vom blech': 4, 'auf dem blech': 4 },
+      torten: { torte: 5, sahnetorte: 6, tortenring: 4, tortenboden: 3, biskuit: 4, 'steif schlagen': 3, 'steif geschlagen': 3, buttercreme: 4, fullung: 2, '^schicht': 2, waagerecht: 3, 'boden halbieren': 4, 'einmal durchschneiden': 4, sahnesteif: 3 },
+      ruhrkuchen: {
+        ruhrkuchen: 6, ruhrteig: 5, gugelhupf: 5, napfkuchen: 5, kastenform: 3, marmorkuchen: 6, kastenkuchen: 5,
+        zitronenkuchen: 4, schokokuchen: 4, schokoladenkuchen: 4, schokoladekuchen: 4, nusskuchen: 4, rotweinkuchen: 5,
+        eierlikorkuchen: 5, kokoskuchen: 3, mandelkuchen: 3, joghurtkuchen: 4, saftkuchen: 4, sandkuchen: 5, topfkuchen: 5,
+        '^schaumig': 3, '^ruhrgerat': 2, handruhrgerat: 2, '^mixer': 1, unterruhren: 2, '^verruhren': 1, '^glatt ruhren': 2,
+        springform: 2, '^backpulver': 2, 'eier einzeln': 3, 'stabchenprobe': 3, 'holzstabchen': 2,
+      },
       obstkuchen: { apfel: 3, kirsch: 3, zwetschg: 4, pflaum: 4, erdbeer: 3, rhabarber: 4, aprikos: 3, '^birne': 3, johannisbeer: 3, heidelbeer: 3, himbeer: 3, stachelbeer: 3, obst: 3, pfirsich: 3, mirabell: 3 },
       kasekuchen: { kasekuchen: 6, '^quark': 4, magerquark: 4, frischkase: 3, cheesecake: 6 },
       'muffins-cupcakes': { muffin: 6, cupcake: 6, formchen: 2 },
@@ -246,6 +252,7 @@ const RULES = {
   },
 };
 
+const CLASSIFIER_VERSION = 2; // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
 const kwCache = new Map();
 function kwRegex(k) {
   if (!kwCache.has(k)) {
@@ -313,6 +320,12 @@ function classify(text, title) {
     if (rule.subs) {
       const ss = Object.entries(rule.subs).map(([sid, d]) => [sid, kwScore(d, body, ti)]).filter(([, s]) => s >= 3).sort((a, b) => b[1] - a[1]);
       if (ss.length) ss.filter(([, s]) => s >= ss[0][1] * 0.6).slice(0, 2).forEach(([sid]) => add(sid));
+      // Nichts Eindeutiges gefunden? Dann die beste Unterkategorie mit schwächeren Hinweisen nehmen
+      if (!subs.some((k) => k.startsWith(cid + '/'))) {
+        const weak = Object.entries(rule.subs).map(([sid, d]) => [sid, kwScore(d, body, ti)]).filter(([, sc]) => sc >= 1).sort((a, b) => b[1] - a[1]);
+        if (weak.length) add(weak[0][0]);
+        else if (cid === 'kuchen' && baking) add('ruhrkuchen'); // gebackener Kuchen ohne weitere Hinweise: meist ein Rührkuchen
+      }
     }
     if (cid === 'nachspeisen' && isVegan) add('vegan');
     if (cid === 'geburtstag' && cats.includes('kuchen') && !subs.some((s) => s.startsWith('geburtstag/'))) add('geburtstagskuchen');
@@ -1325,6 +1338,14 @@ async function init() {
   if (!LS.get('v2', false)) {
     for (const r of [...state.recipes]) if (!r.pages && OLD_EXAMPLES.includes(r.title)) await deleteRecipe(r.id);
     LS.set('v2', true);
+  }
+  if (LS.get('classifier', 0) < CLASSIFIER_VERSION) {
+    for (const r of state.recipes) {
+      if (r.manualCats || !recipeText(r)) continue;
+      const res = classify(recipeText(r), r.title);
+      if (JSON.stringify(res) !== JSON.stringify({ cats: r.cats, subs: r.subs })) { Object.assign(r, res); await saveRecipe(r); }
+    }
+    LS.set('classifier', CLASSIFIER_VERSION);
   }
   render();
   window.APP_STARTED = true;
