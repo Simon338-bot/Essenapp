@@ -176,7 +176,18 @@ const recipeText = (r) => r.text || [r.ingredients, r.steps, r.notes].filter(Boo
    "=wort" → ganzes Wort, "^wort" → Wortanfang, sonst Teilwort
    ========================================================= */
 const FISH = { fisch: 5, lachs: 5, forelle: 5, thunfisch: 5, kabeljau: 5, dorsch: 5, zander: 5, hering: 5, matjes: 5, garnele: 5, shrimp: 5, scampi: 5, krabbe: 5, muschel: 5, tintenfisch: 5, calamar: 5, sardine: 5, sardelle: 5, scholle: 5, barsch: 5, karpfen: 5, meeresfrucht: 5, rollmops: 5, dorade: 5, '^hummer': 5 };
-const MEAT = { fleisch: 4, '^rind': 4, schwein: 5, '^kalb': 4, '^lamm': 5, hackfleisch: 5, '=gehacktes': 4, speck: 4, schinken: 4, wurst: 4, salami: 4, bacon: 4, gulasch: 4, schnitzel: 3, steak: 4, kotelett: 4, '^leber': 4, hirsch: 4, '=reh': 4, chorizo: 4, pancetta: 4, kassler: 5, kasseler: 5, frikadelle: 3, '^mett': 3, rouladen: 3, ochsen: 4, '^wild': 2 };
+const MEAT = { fleisch: 4, '^rind': 4, schwein: 5, '^kalb': 4, '^lamm': 5, hackfleisch: 5, '=gehacktes': 4, speck: 4, schinken: 4, wurst: 4, salami: 4, bacon: 4, gulasch: 4, schnitzel: 3, steak: 4, kotelett: 4, '^leber': 4, hirsch: 4, '=reh': 4, rehrucken: 5, wildschwein: 5, wildgulasch: 5, wildbraten: 5, chorizo: 4, pancetta: 4, kassler: 5, kasseler: 5, frikadelle: 3, '^mett': 3, rouladen: 3, ochsen: 4, '=hack': 3, bolognese: 3 };
+// Wörter, die nach Fleisch oder Fisch klingen, aber keins sind – werden vor der Prüfung entfernt
+const NOT_MEAT = [
+  /(frucht|kokos|melonen|kurbis|tomaten)fleisch/g, /fleischtomate\w*/g,
+  /wild(krauter|kraut|reis|beere\w*|heidelbeer\w*|preiselbeer\w*|pflaume\w*|blume\w*|honig|knoblauch|spargel|hefe|salat|frucht\w*|apfel\w*|birne\w*|kirsch\w*)/g,
+  /\w*rinde\b/g, /\w*rinden\b/g,
+  /\w*(gemuse|pilz|champignon|soja|tofu|blumenkohl|sellerie|kohlrabi|linsen|bohnen|kichererbsen|veggie|vegetarische?n?|vegane?n?|seitan|tempeh|aubergine\w*|zucchini|kartoffel|grunkern|hafer|kase|halloumi|falafel)[\s-]*(steak|schnitzel|frikadelle\w*|bulette\w*|gulasch|hack|burger|bratling\w*|wurst\w*|bolognese|braten|balls?|bällchen|ballchen|roulade\w*)/g,
+  /\b(statt|anstelle von|anstelle|ohne|kein|keine|keinen|nicht)\s+(\w+\s+)?(fleisch|speck|schinken|wurst|hack\w*|bacon|fisch|thunfisch|lachs|hahnchen|huhn)\w*/g,
+  /\b(oder|alternativ|bzw)\.?\s+(\w+)?(fleisch|huhner|rinder|kalbs?)(bruhe|fond)/g, /(gemuse|pilz)\s*-?\s*oder\s+\w*(bruhe|fond)/g,
+  /muschelnudel\w*/g, /huhnerei\w*/g, /gansebluem\w*|ganseblum\w*/g, /\bente\b(?=\s+(gut|schlecht))/g,
+];
+const stripNotMeat = (t) => NOT_MEAT.reduce((acc, re) => acc.replace(re, ' '), t);
 const POULTRY = { hahnchen: 5, '^huhn': 5, huhnerbrust: 5, '^pute': 5, '=ente': 5, entenbrust: 5, '^gans': 5, gansebraten: 5, geflugel: 5, chicken: 5, poulet: 5, hendl: 5 };
 const ANIMAL = { milch: 1, sahne: 1, butter: 1, kase: 1, quark: 1, joghurt: 1, '=ei': 1, '=eier': 1, eigelb: 1, eiweiss: 1, honig: 1, schmand: 1, 'creme fraiche': 1, mascarpone: 1, mozzarella: 1, parmesan: 1, '=feta': 1, gelatine: 1, ricotta: 1 };
 
@@ -283,7 +294,8 @@ const RULES = {
   },
 };
 
-const CLASSIFIER_VERSION = 5; // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
+const CLASSIFIER_VERSION = 6;
+const OCR_VERSION = 2; // erhöhen, wenn sich die Texterkennung verbessert → alle Scans werden im Hintergrund neu gelesen // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
 const kwCache = new Map();
 function kwRegex(k) {
   if (!kwCache.has(k)) {
@@ -347,7 +359,8 @@ function classify(text, title) {
   if (scores.kuchen != null && baking && sweet) scores.kuchen += 3;
   if (scores.gebaeck != null && baking && sweet) scores.gebaeck += 1;
   // Fleisch/Fisch spricht eher für herzhafte Gerichte
-  const fish = kwScore(FISH, body, ti), meat = kwScore(MEAT, body, ti), poultry = kwScore(POULTRY, body, ti);
+  const mb = stripNotMeat(body), mt = stripNotMeat(ti);
+  const fish = kwScore(FISH, mb, mt), meat = kwScore(MEAT, mb, mt), poultry = kwScore(POULTRY, mb, mt);
   if (scores.hauptgerichte != null && (fish || meat || poultry) && !(baking && sweet)) scores.hauptgerichte += 2;
 
   const main = Object.entries(scores).filter(([c]) => c !== 'geburtstag').sort((a, b) => b[1] - a[1]);
@@ -358,6 +371,12 @@ function classify(text, title) {
   }
   if ((scores.geburtstag || 0) >= 5) cats.push('geburtstag');
   if (!cats.length) cats.push(catById('sonstiges') ? 'sonstiges' : state.categories[0]?.id);
+  // Kartoffeln als Hauptzutat (im Titel, mehrfach genannt oder in größerer Menge) → auch unter Beilagen › Kartoffeln
+  const potato = /kartoffel/.test(ti) || (body.match(/kartoffel/g) || []).length >= 3
+    || /(\d{3,}\s*g|\d+([.,]\d+)?\s*kg)\s+(\w+\s+)?\w*kartoffel/.test(body) || /\b([4-9]|1\d)\s+(\w+\s+)?\w*kartoffel/.test(body);
+  const potatoMain = potato && !(baking && sweet) && catById('beilagen') && subById(catById('beilagen'), 'kartoffeln');
+  const onlyPotato = potatoMain && !cats.includes('beilagen');
+  if (onlyPotato) cats.push('beilagen');
 
   // Unterkategorien
   const subs = [];
@@ -368,6 +387,7 @@ function classify(text, title) {
     const cat = catById(cid), rule = RULES[cid];
     if (!cat || !rule) continue;
     const add = (sid) => { if (subById(cat, sid) && !subs.includes(`${cid}/${sid}`)) subs.push(`${cid}/${sid}`); };
+    if (cid === 'beilagen' && onlyPotato) { add('kartoffeln'); continue; } // nur wegen der Kartoffeln dabei
     const said = (sid) => subMention[`${cid}/${sid}`] || 0;
     if (rule.savory) {
       const veggieSaid = said('vegetarisch') || said('vegan');
@@ -391,6 +411,7 @@ function classify(text, title) {
       }
     }
     if (cid === 'nachspeisen' && isVegan) add('vegan');
+    if (cid === 'beilagen' && potatoMain) add('kartoffeln');
     if (cid === 'geburtstag' && cats.includes('kuchen') && !subs.some((s) => s.startsWith('geburtstag/'))) add('geburtstagskuchen');
   }
   return { cats, subs };
@@ -399,6 +420,36 @@ function classify(text, title) {
 // ---------- Titel aus dem erkannten Text bestimmen ----------
 const NOT_TITLE = /^(zutaten|zubereitung|fur\s|für\s|menge|portion|personen|rezept\b|seite\s|zubereitungszeit|backzeit|tipp)/i;
 // Titel-Kandidaten bewerten: große Schrift, dicke (fette) Buchstaben und Position weit oben zählen
+const DISH_ENDINGS = ['kuchen', 'torte', 'tortchen', 'suppe', 'salat', 'auflauf', 'zopf', 'brot', 'brotchen', 'platzchen', 'kekse', 'muffins', 'creme', 'pudding',
+  'eintopf', 'braten', 'schnitzel', 'gulasch', 'pfanne', 'gratin', 'strudel', 'knodel', 'klosse', 'spatzle', 'nudeln', 'risotto', 'curry', 'lasagne', 'pizza', 'quiche',
+  'tarte', 'mousse', 'tiramisu', 'dessert', 'sosse', 'sauce', 'dip', 'bowle', 'punsch', 'smoothie', 'pure', 'waffeln', 'pfannkuchen', 'schnecken', 'brownies',
+  'cookies', 'plunder', 'stollen', 'lebkuchen', 'cheesecake', 'bruschetta', 'omelett', 'frikadellen', 'rouladen', 'gemuse', 'sorbet', 'marmelade', 'konfiture',
+  'chutney', 'pesto', 'hummus', 'schmarrn', 'kaiserschmarrn', 'dampfnudeln', 'knodel', 'pasta', 'spaghetti', 'wraps', 'burger', 'bratlinge', 'puffer', 'reibekuchen',
+  'rosti', 'chili', 'ragout', 'geschnetzeltes', 'filet', 'spiesse', 'happchen', 'kipferl', 'makronen', 'biskuit', 'schnitten', 'riegel', 'tassenkuchen', 'cupcakes',
+  'quarkspeise', 'grutze', 'kompott', 'parfait', 'eis', 'flammkuchen', 'maultaschen', 'gnocchi', 'tacos', 'paella', 'baguette', 'semmeln', 'donauwelle', 'bienenstich'];
+function dishWord(word) {
+  const n = norm(word);
+  return n.length >= 3 && DISH_ENDINGS.some((e) => n === e || (n.endsWith(e) && n.length >= e.length + 2));
+}
+const hasDish = (t) => String(t).split(/[^\p{L}]+/u).some(dishWord);
+// „Das ist Omas bestes Gericht“, „So gelingt er immer!“ – Sätze statt Rezeptnamen
+const SENTENCE_VERB = /\b(ist|sind|war|waren|wird|werden|gelingt|gelingen|schmeckt|schmecken|macht|machen|geht|gibt|liebt|lieben|braucht|brauchen|hat|haben|kann|konnen|muss|mussen|darf|sollte|bleibt|passt|kommt|freut|freuen|lohnt)\b/;
+// Allgemeine Sprüche ohne Gericht („Unser Lieblingsrezept für den Sommer“)
+const GENERIC = /\b(rezept|rezepte|lieblingsrezept|lieblingsgericht|gericht|klassiker|idee|ideen|leckerei|genuss|kostlichkeit|highlight|schmankerl|spezialitat|geheimtipp|favorit|tipp|kuche)\b/;
+function isSentence(t) {
+  const n = norm(t), words = n.split(/\s+/).filter(Boolean);
+  if (GENERIC.test(n) && !hasDish(t)) return true;
+  if (words.length >= 3 && SENTENCE_VERB.test(n)) return true;
+  if (words.length >= 5 && /[.!?]$/.test(t.trim())) return true;
+  return /^(hier|so|wenn|wer|wie|was|warum|heute|endlich|nichts|immer|einfach|schnell)\b/.test(n) && words.length >= 4;
+}
+// Aus einem Satz den Rezeptnamen herausziehen: „Das ist Omas genialer Hefezopf“ → „Omas genialer Hefezopf“
+function dishFromSentence(t) {
+  const m = String(t).match(/\b(?:ist|sind|war|heißt|heisst|gibt es|wird|nennen wir)\s+(?:der|die|das|ein|eine|einen|unser|unsere|unseren|mein|meine|meinen)?\s*(.+?)[.!?]*$/i);
+  const cand = m && m[1].trim();
+  if (cand && hasDish(cand) && cand.split(/\s+/).length <= 6) return cand.charAt(0).toUpperCase() + cand.slice(1);
+  return '';
+}
 function titleCands(lines) {
   const median = (arr) => { const a = arr.filter((x) => x > 0).sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
   const medH = median(lines.map((l) => l.h || 0)) || 1;
@@ -411,7 +462,8 @@ function titleCands(lines) {
       const bold = c.ink && medInk ? Math.min(2.5, c.ink / medInk) : 1;      // wie fett gedruckt
       const top = c.y != null ? 1 - Math.min(1, c.y / 0.6) : 1 - c.i / 15;  // je weiter oben, desto besser
       const words = c.text.split(/\s+/).length;
-      c.score = size * 1.6 + bold * 0.8 + top * 1.5 - (words > 8 ? 1 : 0) - ((c.conf != null && c.conf < 40) ? 0.8 : 0);
+      c.score = size * 1.6 + bold * 0.8 + top * 1.5 - (words > 8 ? 1 : 0) - ((c.conf != null && c.conf < 40) ? 0.8 : 0)
+        + (hasDish(c.text) ? 1.2 : 0) - (isSentence(c.text) ? (hasDish(c.text) ? 1 : 3) : 0);
       return c;
     })
     .sort((a, b) => b.score - a.score || a.i - b.i);
@@ -485,6 +537,7 @@ function fixCase(word, like) {
 }
 function titleLooksGood(t, conf) {
   if (!t || /^rezept vom /i.test(t)) return false;
+  if (isSentence(t)) return false;
   const toks = t.split(/\s+/).filter(Boolean);
   const letters = (t.match(LETTER) || []).length;
   const wordy = toks.filter((x) => isWordy(x.replace(/[&!.,:;'’()]/g, '') || x)).length;
@@ -499,7 +552,43 @@ const MAIN_INGREDIENTS = [['apfel', 'Äpfeln'], ['kirsch', 'Kirschen'], ['erdbee
   ['rind', 'Rindfleisch'], ['schwein', 'Schweinefleisch'], ['kartoffel', 'Kartoffeln'], ['zucchini', 'Zucchini'], ['spinat', 'Spinat'], ['brokkoli', 'Brokkoli'],
   ['kurbis', 'Kürbis'], ['spargel', 'Spargel'], ['champignon', 'Champignons'], ['pilz', 'Pilzen'], ['linsen', 'Linsen'], ['kichererbse', 'Kichererbsen'],
   ['tomate', 'Tomaten'], ['paprika', 'Paprika'], ['nudel', 'Nudeln'], ['reis', 'Reis'], ['feta', 'Feta'], ['mozzarella', 'Mozzarella'], ['kase', 'Käse']];
-function autoTitle(text, cats, subs) {
+// Besitzer wie „Omas“, „Tante Gerdas“ aus dem (schlechten) Titel oder den ersten Zeilen übernehmen
+function ownerPrefix(...texts) {
+  for (const t of texts) {
+    const m = String(t || '').match(/\b(Omas|Opas|Mamas|Papas|Muttis|Mutters|Großmutters|Uromas|(?:Tante|Onkel)\s+\p{Lu}\p{Ll}+s?)\b/u);
+    if (m) return m[1];
+  }
+  return '';
+}
+const GENERIC_DISH = new Set(['suppe', 'pfanne', 'salat', 'kuchen', 'creme', 'sauce', 'sosse', 'gemuse', 'filet', 'pudding', 'brot', 'torte', 'dessert',
+  'pure', 'nudeln', 'pasta', 'braten', 'eintopf', 'auflauf', 'schnitten', 'riegel', 'happchen', 'burger', 'curry', 'chili', 'wraps', 'pizza', 'kekse']);
+// Häufigstes Gericht im Text finden, z. B. „Hefezopf“
+function dishFromText(text) {
+  const counts = new Map(), first = new Map();
+  String(text).split(/[^\p{L}-]+/u).forEach((w, i) => {
+    const clean = w.replace(/^-+|-+$/g, '');
+    if (clean.length < 5 || !dishWord(clean) || !/^\p{Lu}/u.test(clean)) return;
+    const k = norm(clean);
+    if (GENERIC_DISH.has(k)) return; // „Suppe“ oder „Pfanne“ allein sagt nichts über das Rezept
+    counts.set(k, (counts.get(k) || 0) + 1);
+    if (!first.has(k)) first.set(k, { w: clean, i });
+  });
+  let best = null;
+  for (const [k, n] of counts) {
+    const f = first.get(k);
+    const score = n * 2 + (k.length > 7 ? 1 : 0) - f.i / 400 - (['kuchen', 'creme', 'sauce', 'sosse', 'gemuse', 'filet', 'teig', 'pudding'].includes(k) ? 2 : 0);
+    if (!best || score > best.score) best = { w: f.w, score };
+  }
+  return best ? best.w : '';
+}
+function autoTitle(text, cats, subs, badTitle = '') {
+  const fromSentence = dishFromSentence(badTitle);
+  if (fromSentence) return fromSentence;
+  const dish = dishFromText(text);
+  if (dish) {
+    const owner = ownerPrefix(badTitle, String(text).slice(0, 300));
+    return owner && !norm(dish).startsWith(norm(owner)) ? `${owner} ${dish}` : dish;
+  }
   const cid = cats[0], sid = (subs.find((k) => k.startsWith(cid + '/')) || '').split('/')[1];
   const kuchenSub = { blechkuchen: 'Blechkuchen', ruhrkuchen: 'Rührkuchen', obstkuchen: 'Obstkuchen', kasekuchen: 'Käsekuchen', torten: 'Torte', 'muffins-cupcakes': 'Muffins', 'ohne-backen': 'Kuchen ohne Backen' };
   const labels = { vorspeisen: 'Vorspeise', suppen: 'Suppe', hauptgerichte: 'Hauptgericht', beilagen: sid === 'salate' ? 'Salat' : 'Beilage',
@@ -520,11 +609,20 @@ function autoTitle(text, cats, subs) {
 // Titel + Kategorien für einen frisch gelesenen Scan bestimmen
 function titleAndCats(lines, text, fallback) {
   const info = pickTitleInfo(lines);
-  const t = info ? tidyTitle(info.text, text) : '';
-  const good = titleLooksGood(t, info && info.conf);
+  let t = info ? tidyTitle(info.text, text) : '';
+  const good = titleLooksGood(t, info && info.conf) && !(info && isSentence(info.text));
+  if (info && !good) t = info.text; // für das Herausziehen des Gerichts den ganzen Satz behalten
+  // „Omas“ aus einer Zeile in der Nähe übernehmen (z. B. „Das ist Omas bestes Gericht!“ über „Hefezopf“)
+  if (good && t.split(/\s+/).length <= 3 && !ownerPrefix(t)) {
+    const owner = ownerPrefix(...lines.slice(0, 6).map((l) => l.text));
+    if (owner) t = `${owner} ${t}`;
+  }
   let title = good ? t : '';
   const { cats, subs } = classify(text, title);
-  if (!good) title = autoTitle(text, cats, subs) || t || fallback || `Rezept vom ${fmtDate(Date.now())}`;
+  if (!good) {
+    title = autoTitle(text, cats, subs, t) || t || fallback || `Rezept vom ${fmtDate(Date.now())}`;
+    return { title, ...classify(text, title) };
+  }
   return { title, cats, subs };
 }
 function cleanTitle(s) {
@@ -1073,6 +1171,7 @@ async function rereadRecipe(r) {
   }
   if (!texts.length) return;
   r.text = texts.join('\n\n').trim();
+  r.pageTexts = texts;
   applyTitleAndCats(r, lines);
   await saveRecipe(r);
 }
@@ -1270,6 +1369,7 @@ function viewHome() {
     ${searchBox()}
     ${Sync.cfg ? `<a class="sync-line" href="#/einstellungen" id="sync-line">${syncLine()}</a>` : ''}
     ${working ? '<a class="banner" href="#/neu"><span class="spin"></span> Rezepte werden gerade eingelesen …</a>' : ''}
+    <div class="banner" id="bg-banner" ${BG.active ? '' : 'hidden'}>${bgBanner()}</div>
     ${!total ? `<div class="empty" style="margin-top:18px"><span class="big">📄</span>
       Noch keine Rezepte eingescannt.<br>Wähle Fotos oder PDFs aus – die App liest sie und sortiert sie automatisch ein.<br><br>
       <a class="btn primary" href="#/neu">📷 Erstes Rezept einscannen</a></div>` : ''}
@@ -2262,6 +2362,38 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) sche
 window.addEventListener('online', () => scheduleSync(300));
 setInterval(() => { if (!document.hidden) sync(); }, 120000);
 
+// ---------- Alle Scans im Hintergrund neu lesen (nach Verbesserungen der Erkennung) ----------
+const BG = { active: false, done: 0, total: 0 };
+function bgBanner() {
+  return BG.active ? `<span class="spin"></span> Rezepte werden mit der verbesserten Erkennung neu gelesen: ${BG.done} von ${BG.total}` : '';
+}
+function updateBg() {
+  const el = $('#bg-banner');
+  if (el) { el.innerHTML = bgBanner(); el.hidden = !BG.active; }
+}
+async function backgroundReread() {
+  if (LS.get('ocrVersion', 0) >= OCR_VERSION) return;
+  const prog = LS.get('ocrProgress', { v: OCR_VERSION, ids: [] });
+  const doneIds = new Set(prog.v === OCR_VERSION ? prog.ids : []);
+  const list = state.recipes.filter((r) => (r.pages || []).length && !doneIds.has(r.id));
+  BG.total = list.length; BG.done = 0; BG.active = list.length > 0; updateBg();
+  for (const item of list) {
+    const r = recById(item.id);
+    if (r) { try { await rereadRecipe(r); } catch (err) { console.warn(err); } }
+    doneIds.add(item.id);
+    LS.set('ocrProgress', { v: OCR_VERSION, ids: [...doneIds] });
+    BG.done++; updateBg();
+    if (BG.done % 3 === 0 && /^#?\/?$|^#\/k\//.test(location.hash)) { render.keepScroll = true; render(); }
+  }
+  BG.active = false;
+  LS.set('ocrVersion', OCR_VERSION);
+  updateBg();
+  if (list.length) {
+    toast('Fertig ✓ Alle Rezepte wurden neu gelesen und einsortiert');
+    if (/^#?\/?$|^#\/k\//.test(location.hash)) { render.keepScroll = true; render(); }
+  }
+}
+
 // ---------- Start ----------
 const OLD_EXAMPLES = ['Zwetschgendatschi vom Blech', 'Lachs mit Kräuterkruste', 'Tomaten-Bruschetta', 'Schoko-Muffins', 'Tiramisu'];
 async function init() {
@@ -2306,7 +2438,7 @@ async function init() {
         if (titleLooksGood(t)) r.title = t;
         else {
           const c = classify(text, '');
-          r.title = autoTitle(text, c.cats, c.subs) || t || r.title;
+          r.title = autoTitle(text, c.cats, c.subs, t) || t || r.title;
         }
       }
       if (!r.manualCats) Object.assign(r, classify(text, r.title));
@@ -2320,5 +2452,6 @@ async function init() {
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
   sync();
+  setTimeout(() => backgroundReread(), 2500);
 }
 init();
