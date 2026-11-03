@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Meine Rezepte</title>
+  <meta name="description" content="Deine eigenen Rezepte – schnell gefunden, einfach nachgekocht.">
+  <meta name="theme-color" content="#c8553d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Rezepte">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar" id="topbar"></header>
+  <div id="timers" class="timers" aria-live="polite"></div>
+  <main id="app" class="app"></main>
+
+  <nav class="tabbar" id="tabbar">
+    <a href="#/" data-tab="home"><span class="ti">🏠</span><span>Start</span></a>
+    <a href="#/suche" data-tab="search"><span class="ti">🔍</span><span>Suche</span></a>
+    <a href="#/neu" data-tab="new" class="tab-new"><span class="ti">＋</span><span>Neu</span></a>
+    <a href="#/favoriten" data-tab="fav"><span class="ti">❤️</span><span>Favoriten</span></a>
+    <a href="#/einstellungen" data-tab="settings"><span class="ti">⚙️</span><span>Mehr</span></a>
+  </nav>
+
+  <div id="cook" class="cook" hidden></div>
+  <div id="toast" class="toast" role="status"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
