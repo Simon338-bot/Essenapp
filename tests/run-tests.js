@@ -312,7 +312,7 @@ async function testUpdatePath(browser) {
   }
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'), sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
   const v = (html.match(/app\.js\?v=(\d+)/) || [])[1];
-  check(`Versionsnummern in index.html und sw.js passen zusammen', v && sw.includes(`app.js?v=${v}`) && html.includes(`vocab.js?v=${v}`) && html.includes(`styles.css?v=${v}`) && sw.includes(`rezepte-v${v}`), `index v=${v}`);
+  check('Versionsnummern in index.html und sw.js passen zusammen', v && sw.includes(`app.js?v=${v}`) && html.includes(`vocab.js?v=${v}`) && html.includes(`styles.css?v=${v}`) && sw.includes(`rezepte-v${v}`), `index v=${v}`);
   check('Keine JavaScript-Fehler (Seiten)', p.errors.length === 0, p.errors.join(' | '));
   await p.context().close();
 }
