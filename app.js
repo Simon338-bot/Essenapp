@@ -295,7 +295,7 @@ const RULES = {
 };
 
 const CLASSIFIER_VERSION = 6;
-const OCR_VERSION = 2; // erhöhen, wenn sich die Texterkennung verbessert → alle Scans werden im Hintergrund neu gelesen // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
+const OCR_VERSION = 3; // erhöhen, wenn sich die Texterkennung verbessert → alle Scans werden im Hintergrund neu gelesen // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
 const kwCache = new Map();
 function kwRegex(k) {
   if (!kwCache.has(k)) {
@@ -435,6 +435,7 @@ const hasDish = (t) => String(t).split(/[^\p{L}]+/u).some(dishWord);
 // „Das ist Omas bestes Gericht“, „So gelingt er immer!“ – Sätze statt Rezeptnamen
 const SENTENCE_VERB = /\b(ist|sind|war|waren|wird|werden|gelingt|gelingen|schmeckt|schmecken|macht|machen|geht|gibt|liebt|lieben|braucht|brauchen|hat|haben|kann|konnen|muss|mussen|darf|sollte|bleibt|passt|kommt|freut|freuen|lohnt)\b/;
 // Allgemeine Sprüche ohne Gericht („Unser Lieblingsrezept für den Sommer“)
+const MASTHEAD = /^(zeit\s*magazin|zeitmagazin|die zeit|brigitte|lecker|essen\s*(&|und)\s*trinken|landlust|lisa|chefkoch|kochen\s*(&|und)\s*geniessen|meine familie\s*(&|und)\s*ich|tina|burda|horzu|apotheken\s*umschau|stern|spiegel|vital|freundin|fur sie|frau im spiegel|dr\.?\s*oetker|thermomix|weight watchers|effilee|beef|living at home|schoner wohnen|landidee|meine kuche|einfach hausgemacht|mein schoner garten|bild der frau|laura|tina|neue post|das neue|gala|bunte|madame|petra|myway|essen\s*(&|und)\s*geniessen|kochbuch|magazin|seite\s*\d+)$/;
 const GENERIC = /\b(rezept|rezepte|lieblingsrezept|lieblingsgericht|gericht|klassiker|idee|ideen|leckerei|genuss|kostlichkeit|highlight|schmankerl|spezialitat|geheimtipp|favorit|tipp|kuche)\b/;
 function isSentence(t) {
   const n = norm(t), words = n.split(/\s+/).filter(Boolean);
@@ -454,7 +455,7 @@ function titleCands(lines) {
   const median = (arr) => { const a = arr.filter((x) => x > 0).sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
   const medH = median(lines.map((l) => l.h || 0)) || 1;
   const medInk = median(lines.map((l) => l.ink || 0));
-  return lines.slice(0, 15)
+  return lines.slice(0, 25)
     .map((l, i) => ({ ...l, i, text: cleanTitle(l.text) }))
     .filter((l) => (l.text.match(/[a-zäöüß]/gi) || []).length >= 4 && !NOT_TITLE.test(l.text) && !/^\d/.test(l.text) && l.text.length <= 80)
     .map((c) => {
@@ -463,7 +464,8 @@ function titleCands(lines) {
       const top = c.y != null ? 1 - Math.min(1, c.y / 0.6) : 1 - c.i / 15;  // je weiter oben, desto besser
       const words = c.text.split(/\s+/).length;
       c.score = size * 1.6 + bold * 0.8 + top * 1.5 - (words > 8 ? 1 : 0) - ((c.conf != null && c.conf < 40) ? 0.8 : 0)
-        + (hasDish(c.text) ? 1.2 : 0) - (isSentence(c.text) ? (hasDish(c.text) ? 1 : 3) : 0);
+        + (hasDish(c.text) ? 1.2 : 0) - (isSentence(c.text) ? (hasDish(c.text) ? 1 : 3) : 0)
+        - (MASTHEAD.test(norm(c.text).replace(/[^a-z0-9&.\s]/g, '').replace(/\s+/g, ' ').trim()) ? 6 : 0);
       return c;
     })
     .sort((a, b) => b.score - a.score || a.i - b.i);
@@ -481,14 +483,48 @@ function pickTitleInfo(lines) {
   const cands = titleCands(lines);
   if (!cands.length) return null;
   const best = { ...cands[0] };
-  // Überschrift über zwei Zeilen (gleich groß, direkt darunter)?
-  const next = cands.find((c) => c.i === best.i + 1);
-  if (next && best.h && next.h >= best.h * 0.85 && next.h <= best.h * 1.2 && (best.text + next.text).length <= 60) {
-    best.text += ' ' + next.text;
-    if (next.conf != null && best.conf != null) best.conf = Math.min(best.conf, next.conf);
+  const multi = best.words && best.words.length ? stackTitleLines(lines, best) : null;
+  if (multi) { best.text = multi.text; if (multi.conf != null) best.conf = multi.conf; }
+  else {
+    // Überschrift über zwei Zeilen (gleich groß, direkt darunter)?
+    const next = cands.find((c) => c.i === best.i + 1);
+    if (next && best.h && next.h >= best.h * 0.85 && next.h <= best.h * 1.2 && (best.text + next.text).length <= 60) {
+      best.text += ' ' + next.text;
+      if (next.conf != null && best.conf != null) best.conf = Math.min(best.conf, next.conf);
+    }
   }
   const text = best.text.length > 70 ? best.text.slice(0, 70).replace(/\s+\S*$/, '') : best.text;
   return { text, conf: best.conf };
+}
+// Überschrift über mehrere Zeilen in derselben Spalte zusammensetzen, z. B.
+// „Salat mit / Erdnuss- / Chili-Soße / (Gado Gado)“ – Wortreste links daneben (Foto, Tisch) werden ignoriert
+function stackTitleLines(lines, best) {
+  const real = (w) => isWordy(String(w.text).replace(/[()–,.:!&]/g, '').replace(/^-+|-+$/g, '') || '§') || /^[(&]|[)]$/.test(w.text) && /\p{L}{2}/u.test(w.text);
+  const words0 = best.words.filter((w) => w.bbox && real(w));
+  if (!words0.length) return null;
+  const wh = (ws) => { const hs = ws.map((w) => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b); return hs[Math.floor(hs.length / 2)] || 0; };
+  const H = wh(words0);
+  if (!H) return null;
+  const colX = Math.min(...words0.map((w) => w.bbox.x0));
+  const inCol = (w) => w.bbox && w.bbox.x0 >= colX - H * 0.6 && real(w);
+  const parts = [words0.filter((w) => w.bbox.x0 >= colX - H * 0.6).map((w) => w.text).join(' ')];
+  let lastY1 = Math.max(...words0.map((w) => w.bbox.y1));
+  const confs = words0.map((w) => w.conf).filter((x) => x != null);
+  const below = lines.filter((l) => l !== best && l.bbox && l.words && l.bbox.y0 > best.bbox.y0).sort((a, b) => a.bbox.y0 - b.bbox.y0);
+  for (const l of below) {
+    if (parts.length >= 5) break;
+    const ws = l.words.filter(inCol);
+    if (!ws.length) continue; // nur Wortreste – überspringen
+    const y0 = Math.min(...ws.map((w) => w.bbox.y0));
+    if (y0 - lastY1 > H * 1.1) break; // zu weit weg
+    const h = wh(ws);
+    if (h < H * 0.6 || h > H * 1.6) break; // kleinere Schrift: hier beginnt der normale Text
+    parts.push(ws.map((w) => w.text).join(' '));
+    confs.push(...ws.map((w) => w.conf).filter((x) => x != null));
+    lastY1 = Math.max(...ws.map((w) => w.bbox.y1));
+  }
+  if (parts.length < 2) return null;
+  return { text: parts.join(' ').replace(/\s+/g, ' ').trim(), conf: confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null };
 }
 
 // ---------- Titel aufräumen ----------
@@ -833,6 +869,53 @@ function measureLines(src, lines) {
     }
   } catch (err) { console.warn(err); }
 }
+// Papier im Foto finden und Hintergrund (Holztisch, Tischdecke …) abschneiden – nur für das Lesen
+function cropToPaper(src) {
+  try {
+    const W = 240, H = Math.max(1, Math.round(src.height * (W / src.width)));
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(src, 0, 0, W, H);
+    const d = ctx.getImageData(0, 0, W, H).data;
+    const vals = [];
+    for (let i = 0; i < d.length; i += 16) vals.push(Math.max(d[i], d[i + 1], d[i + 2]));
+    vals.sort((a, b) => a - b);
+    const bright = vals[Math.floor(vals.length * 0.9)];
+    if (bright < 90) return src;
+    const paper = new Uint8Array(W * H);
+    for (let y = 0, j = 0; y < H; y++) for (let x = 0; x < W; x++, j++) {
+      const i = j * 4, mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]);
+      paper[j] = mx > bright * 0.72 && (mx - mn) / (mx || 1) < 0.22 ? 1 : 0;
+    }
+    // längster Bereich mit etwas Papier; kurze Lücken (z. B. ein großes Foto auf der Seite) werden überbrückt
+    const run = (ratios, min) => {
+      const gap = Math.round(ratios.length * 0.25);
+      let best = [0, -1], start = -1, last = -1;
+      for (let k = 0; k <= ratios.length; k++) {
+        const on = k < ratios.length && ratios[k] > min;
+        if (on) { if (start < 0) start = k; last = k; }
+        else if (start >= 0 && (k === ratios.length || k - last > gap)) {
+          if (last - start > best[1] - best[0]) best = [start, last];
+          start = -1;
+        }
+      }
+      return best;
+    };
+    const rows = []; for (let y = 0; y < H; y++) { let n = 0; for (let x = 0; x < W; x++) n += paper[y * W + x]; rows.push(n / W); }
+    const [y0, y1] = run(rows, 0.12);
+    const cols = []; for (let x = 0; x < W; x++) { let n = 0; for (let y = y0; y <= y1; y++) n += paper[y * W + x]; cols.push(n / Math.max(1, y1 - y0 + 1)); }
+    const [x0, x1] = run(cols, 0.12);
+    const area = ((x1 - x0 + 1) * (y1 - y0 + 1)) / (W * H);
+    if (y1 < y0 || x1 < x0 || area > 0.9 || area < 0.2) return src; // nichts Eindeutiges – lieber nichts abschneiden
+    const s = src.width / W, m = 4; // kleiner Rand
+    const sx = Math.max(0, (x0 - m) * s), sy = Math.max(0, (y0 - m) * s);
+    const sw = Math.min(src.width - sx, (x1 - x0 + 1 + 2 * m) * s), sh = Math.min(src.height - sy, (y1 - y0 + 1 + 2 * m) * s);
+    const out = document.createElement('canvas');
+    out.width = Math.round(sw); out.height = Math.round(sh);
+    out.getContext('2d').drawImage(src, sx, sy, sw, sh, 0, 0, out.width, out.height);
+    return out;
+  } catch (err) { console.warn(err); return src; }
+}
 // Eine einzelne Zeile (die Überschrift) vergrößert noch einmal lesen
 async function rereadLine(worker, src, bb) {
   const lh = bb.y1 - bb.y0;
@@ -945,6 +1028,7 @@ function correctOcr(data, text, lines) {
 async function ocrCanvas(canvas, onPct) {
   ocrProgress = (m) => { if (m.status === 'recognizing text') onPct(Math.round(m.progress * 100)); else if (/load|init/.test(m.status)) onPct(-1); };
   const w = await getOcr();
+  canvas = cropToPaper(canvas);
   let src = enhanceForOcr(canvas);
   let { data } = await w.recognize(src);
   // Schwer lesbar (z. B. ungewöhnliche Schrift)? Dann auch das Originalbild probieren und das Bessere nehmen
@@ -955,7 +1039,10 @@ async function ocrCanvas(canvas, onPct) {
       if ((alt.confidence || 0) > (data.confidence || 0) + 2) { data = alt; src = canvas; }
     } catch (err) { console.warn(err); }
   }
-  const lines = (data.lines || []).map((l) => ({ text: l.text.trim(), h: l.bbox ? l.bbox.y1 - l.bbox.y0 : 0, bbox: l.bbox, conf: l.confidence })).filter((l) => l.text);
+  const lines = (data.lines || []).map((l) => ({
+    text: l.text.trim(), h: l.bbox ? l.bbox.y1 - l.bbox.y0 : 0, bbox: l.bbox, conf: l.confidence,
+    words: (l.words || []).map((w) => ({ text: w.text, bbox: w.bbox, conf: w.confidence })),
+  })).filter((l) => l.text);
   measureLines(src, lines);
   let text = data.text || '';
   // Die Überschrift ist oft in Zierschrift – sie wird noch einmal vergrößert gelesen

@@ -1,5 +1,11 @@
 # Änderungen
 
+## 2026-11-04
+- Fotos von Zeitschriftenseiten: Hintergrund (z. B. Holztisch) wird vor dem Lesen abgeschnitten
+- Titel über mehrere Zeilen werden zusammengesetzt (z. B. „Salat mit / Erdnuss- / Chili-Soße / (Gado Gado)“)
+- Zeitschriftennamen wie „ZEIT MAGAZIN“ oder „BRIGITTE“ werden nicht mehr als Titel genommen
+- Alle Scans werden einmal automatisch neu gelesen
+
 ## 2026-11-03
 - Rezepte einscannen (Fotos/PDFs), Texterkennung auf dem Gerät, automatische Kategorien
 - Suche in ganzen Sätzen, Familien-Rezeptbuch, mehrseitige Rezepte

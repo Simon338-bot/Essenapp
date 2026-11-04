@@ -59,6 +59,21 @@ async function makeFixtures(browser) {
     <div style="font-size:22px;letter-spacing:3px;color:#666">AUS OMAS KÜCHE · HEFT 12 · SEITE 34</div><div style="font-size:24px;margin-top:40px;color:#555">Ein Klassiker für jede Kaffeetafel – saftig und schnell gemacht.</div>
     <h1 style="font-weight:900;font-size:72px;margin:30px 0 10px">Rhabarber-Cheesecake</h1><div style="font-size:26px;color:#666">Für 1 Springform (26 cm) · 75 Minuten</div>
     <div style="columns:2;column-gap:60px;margin-top:40px;font-size:25px;line-height:1.5"><b>Zutaten</b><br>200 g Butterkekse<br>80 g Butter<br>500 g Rhabarber<br>600 g Frischkäse<br>150 g Zucker<br>3 Eier<br>200 g Schmand<br><br><b>Zubereitung</b><br>Kekse zerbröseln, mit Butter mischen und als Boden in die Springform drücken. Frischkäse, Zucker, Eier und Schmand glatt rühren, auf den Boden geben und den Rhabarber darauf verteilen. Bei 170 °C etwa 60 Minuten backen.</div></body></html>`, 'zeitschrift.jpg', { quality: 55 });
+  // Zeitschriftenseite auf dem Holztisch: Titel über 4 Zeilen rechts neben einem Foto, Zeitschriftenname oben
+  const zeit = (masthead, mastSize) => `<html><body style="margin:0;width:1500px;height:2000px;overflow:hidden;background:repeating-linear-gradient(8deg,#8a5a32 0 18px,#9b6a3e 18px 40px,#7d5230 40px 52px)">
+    <div style="position:absolute;left:150px;top:260px;width:1220px;height:1800px;background:#f3f1ec;transform:rotate(-0.8deg);box-shadow:0 0 30px rgba(0,0,0,.4);font-family:'DejaVu Sans',sans-serif;color:#2a2a2a;filter:blur(0.6px)">
+      <div style="text-align:center;font-family:'DejaVu Serif';font-weight:bold;font-size:${mastSize}px;letter-spacing:2px;margin-top:40px">${masthead}</div>
+      <div style="position:absolute;left:70px;top:${mastSize + 80}px;width:780px;height:600px;background:linear-gradient(135deg,#3a8fc4,#e0a040 60%,#2f6f9f)"></div>
+      <div style="position:absolute;left:880px;top:${mastSize + 90}px;width:310px;font-family:'DejaVu Serif';font-weight:bold;font-size:40px;line-height:1.25;letter-spacing:1px">Salat mit<br>Erdnuss-<br>Chili-Soße<br><span style="font-size:32px">(Gado Gado)</span>
+        <div style="border-top:2px solid #444;margin:20px 0 14px"></div>
+        <div style="font-size:20px;color:#2a7a6a;font-family:'DejaVu Sans'">ZUTATEN FÜR<br>3 BIS 4 PERSONEN</div>
+        <div style="font-size:19px;font-weight:normal;font-family:'DejaVu Sans';line-height:1.35;margin-top:6px">100 g geschälte, ungesalzene Erdnüsse<br>1 Knoblauchzehe<br>30 ml Sojasoße<br>Saft von 1 Limette<br>Chili nach Geschmack<br>200 g Kokosmilch<br>1 Brokkoli<br>4 mittelgroße Kartoffeln<br>Salz<br>3–4 Eier<br>3 Frühlingszwiebeln</div></div>
+      <div style="position:absolute;left:70px;top:${mastSize + 730}px;width:500px;font-size:19px;line-height:1.45">Ich wusste nicht, dass man Erdnüsse auch freiwillig essen kann. Aber dann habe ich dieses Rezept für Gado Gado gefunden: einen aus Indonesien stammenden Salat aus verschiedenen Gemüsen, der mit einer Erdnusssoße angemacht wird.</div>
+      <div style="position:absolute;left:620px;top:${mastSize + 730}px;width:540px;font-size:19px;line-height:1.45">Die Erdnüsse auf ein Backblech legen und im Ofen bei 180 °C ungefähr 6 Minuten rösten. Mit Knoblauch, Sojasoße, Limettensaft und Chili zu einer Paste mixen. Kokosmilch dazugießen. Brokkoli dünsten, Kartoffeln kochen, Eier hart kochen. Alles mit dem Dressing vermengen.</div>
+    </div></body></html>`;
+  await p.setViewportSize({ width: 1500, height: 2000 });
+  await shot(zeit('ZEIT MAGAZIN', 30), 'zeit-holztisch.jpg', { quality: 72 });
+  await shot(zeit('BRIGITTE', 90), 'brigitte-holztisch.jpg', { quality: 72 });
   // PDF mit Textebene + Bild-PDF (zweite Seite leer)
   await p.setViewportSize({ width: 1240, height: 1754 });
   await p.setContent(recipePage('Bunte Muffins zum Kindergeburtstag', 'Für 12 Stück', ['200 g Mehl', '2 TL Backpulver', '150 g Zucker', '2 Eier', '120 ml Öl', '200 ml Milch', 'bunte Smarties'], 'Den Ofen auf 180 °C vorheizen. Alle Zutaten verrühren, in Muffinförmchen füllen und 20 Minuten backen.').replace('padding:110px 120px', 'padding:40px'));
@@ -100,7 +115,7 @@ const has = (r, ...keys) => r && keys.every((k) => (k.includes('/') ? r.subs.inc
 async function testScanning(browser) {
   console.log('\n— Scannen, Titel, Kategorien —');
   const p = await newApp(browser);
-  await scan(p, ['apfelkuchen.jpg', 'lachs.jpg', 'linsensuppe.jpg', 'muffins.pdf', 'scan_0001.pdf', 'frau-holle-foto.jpg', 'zeitschrift.jpg']);
+  await scan(p, ['apfelkuchen.jpg', 'lachs.jpg', 'linsensuppe.jpg', 'muffins.pdf', 'scan_0001.pdf', 'frau-holle-foto.jpg', 'zeitschrift.jpg', 'zeit-holztisch.jpg']);
   const list = await recipes(p);
   const exp = [
     [/^Omas gedeckter Apfelkuchen$/, ['kuchen/obstkuchen']],
@@ -110,13 +125,20 @@ async function testScanning(browser) {
     [/^Marmorkuchen$/, ['kuchen/ruhrkuchen']],
     [/^Frau Holle Kuchen$/, ['kuchen/blechkuchen']],
     [/^Rhabarber-Cheesecake$/, ['kuchen/kasekuchen']],
+    [/^Salat mit Erdnuss-Chili-Soße \(Gado Gado\)$/, ['beilagen/salate']],
   ];
   for (const [re, subs] of exp) {
     const r = find(list, re);
     check(`Scan erkannt: ${re.source.replace(/[\^$]/g, '')}`, has(r, ...subs), r ? `${r.title} → ${r.subs.join(', ')}` : 'nicht gefunden. Titel: ' + list.map((x) => x.title).join(' | '));
   }
   check('Frau Holle nicht unter Torten', !has(find(list, /Frau Holle/), 'kuchen/torten'));
-  check('Leere PDF-Seite übersprungen', list.length === 7, `${list.length} Rezepte`);
+  check('Leere PDF-Seite übersprungen', list.length === 8, `${list.length} Rezepte`);
+  // Großer Zeitschriftenname über dem Titel darf nicht Titel werden (eigener Scan-Durchlauf)
+  const p3 = await newApp(browser);
+  await scan(p3, ['brigitte-holztisch.jpg']);
+  const bt = (await recipes(p3))[0];
+  check('Zeitschriftenname wird nicht Titel', bt && bt.title === 'Salat mit Erdnuss-Chili-Soße (Gado Gado)', bt && bt.title);
+  await p3.context().close();
   // Suche
   const search = async (q) => { await p.goto(APP + '#/suche?q=' + encodeURIComponent(q)); await sleep(250); return p.$$eval('.rec-card .title', (e) => e.map((x) => x.textContent)); };
   const sq = [['Ich suche einen Apfelkuchen', 'Omas gedeckter Apfelkuchen'], ['Apfelkuhcen', 'Omas gedeckter Apfelkuchen'], ['etwas mit Lachs', 'Lachsfilet mit Senf-Dill-Soße'], ['Kokosmilch', 'Rote Linsensuppe'], ['Suppe ohne Fleisch', 'Rote Linsensuppe'], ['Kindergeburtstag', 'Bunte Muffins zum Kindergeburtstag']];
@@ -290,7 +312,7 @@ async function testUpdatePath(browser) {
   }
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'), sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
   const v = (html.match(/app\.js\?v=(\d+)/) || [])[1];
-  check('Versionsnummern in index.html und sw.js passen zusammen', v && sw.includes(`app.js?v=${v}`) && html.includes(`vocab.js?v=${v}`) && html.includes(`styles.css?v=${v}`) && sw.includes(`rezepte-v${v}`), `index v=${v}`);
+  check(`Versionsnummern in index.html und sw.js passen zusammen', v && sw.includes(`app.js?v=${v}`) && html.includes(`vocab.js?v=${v}`) && html.includes(`styles.css?v=${v}`) && sw.includes(`rezepte-v${v}`), `index v=${v}`);
   check('Keine JavaScript-Fehler (Seiten)', p.errors.length === 0, p.errors.join(' | '));
   await p.context().close();
 }
