@@ -176,7 +176,7 @@ const recipeText = (r) => r.text || [r.ingredients, r.steps, r.notes].filter(Boo
    "=wort" → ganzes Wort, "^wort" → Wortanfang, sonst Teilwort
    ========================================================= */
 const FISH = { fisch: 5, lachs: 5, forelle: 5, thunfisch: 5, kabeljau: 5, dorsch: 5, zander: 5, hering: 5, matjes: 5, garnele: 5, shrimp: 5, scampi: 5, krabbe: 5, muschel: 5, tintenfisch: 5, calamar: 5, sardine: 5, sardelle: 5, scholle: 5, barsch: 5, karpfen: 5, meeresfrucht: 5, rollmops: 5, dorade: 5, '^hummer': 5 };
-const MEAT = { fleisch: 4, '^rind': 4, schwein: 5, '^kalb': 4, '^lamm': 5, hackfleisch: 5, '=gehacktes': 4, speck: 4, schinken: 4, wurst: 4, salami: 4, bacon: 4, gulasch: 4, schnitzel: 3, steak: 4, kotelett: 4, '^leber': 4, hirsch: 4, '=reh': 4, rehrucken: 5, wildschwein: 5, wildgulasch: 5, wildbraten: 5, chorizo: 4, pancetta: 4, kassler: 5, kasseler: 5, frikadelle: 3, '^mett': 3, rouladen: 3, ochsen: 4, '=hack': 3, bolognese: 3 };
+const MEAT = { fleisch: 4, '^rind': 4, schwein: 5, '^kalb': 4, '^lamm': 5, hackfleisch: 5, '=gehacktes': 4, speck: 4, schinken: 4, wurst: 4, salami: 4, bacon: 4, gulasch: 4, schnitzel: 3, steak: 4, kotelett: 4, '^leber': 4, hirsch: 4, '=reh': 4, rehrucken: 5, wildschwein: 5, wildgulasch: 5, wildbraten: 5, chorizo: 4, pancetta: 4, salsiccia: 4, mortadella: 4, prosciutto: 4, serrano: 4, '^parma': 3, kassler: 5, kasseler: 5, frikadelle: 3, '^mett': 3, rouladen: 3, ochsen: 4, '=hack': 3, bolognese: 3 };
 // Wörter, die nach Fleisch oder Fisch klingen, aber keins sind – werden vor der Prüfung entfernt
 const NOT_MEAT = [
   /(frucht|kokos|melonen|kurbis|tomaten)fleisch/g, /fleischtomate\w*/g,
@@ -185,11 +185,14 @@ const NOT_MEAT = [
   /\w*(gemuse|pilz|champignon|soja|tofu|blumenkohl|sellerie|kohlrabi|linsen|bohnen|kichererbsen|veggie|vegetarische?n?|vegane?n?|seitan|tempeh|aubergine\w*|zucchini|kartoffel|grunkern|hafer|kase|halloumi|falafel)[\s-]*(steak|schnitzel|frikadelle\w*|bulette\w*|gulasch|hack|burger|bratling\w*|wurst\w*|bolognese|braten|balls?|bällchen|ballchen|roulade\w*)/g,
   /\b(statt|anstelle von|anstelle|ohne|kein|keine|keinen|nicht)\s+(\w+\s+)?(fleisch|speck|schinken|wurst|hack\w*|bacon|fisch|thunfisch|lachs|hahnchen|huhn)\w*/g,
   /\b(oder|alternativ|bzw)\.?\s+(\w+)?(fleisch|huhner|rinder|kalbs?)(bruhe|fond)/g, /(gemuse|pilz)\s*-?\s*oder\s+\w*(bruhe|fond)/g,
+  /fleisch(los|frei|ersatz)\w*|ohne fleisch\w*|(soja|erbsen|veggie|vegetarisch\w*|vegan\w*)fleisch\w*/g,
+  // Fleisch nur als Möglichkeit erwähnt: „Wer mag, kann auch Schinken dazugeben“, „Für Fleischesser …“, „nach Belieben Speck“
+  /(wer (mag|will|mochte)|nach belieben|wahlweise|optional|fur fleisch(esser|liebhaber|fans)|wer es nicht vegetarisch|kann man auch|lasst sich auch|schmeckt auch mit)[^.!?\n]{0,80}/g,
   /muschelnudel\w*/g, /huhnerei\w*/g, /gansebluem\w*|ganseblum\w*/g, /\bente\b(?=\s+(gut|schlecht))/g,
 ];
 const stripNotMeat = (t) => NOT_MEAT.reduce((acc, re) => acc.replace(re, ' '), t);
 const POULTRY = { hahnchen: 5, '^huhn': 5, huhnerbrust: 5, '^pute': 5, '=ente': 5, entenbrust: 5, '^gans': 5, gansebraten: 5, geflugel: 5, chicken: 5, poulet: 5, hendl: 5 };
-const ANIMAL = { milch: 1, sahne: 1, butter: 1, kase: 1, quark: 1, joghurt: 1, '=ei': 1, '=eier': 1, eigelb: 1, eiweiss: 1, honig: 1, schmand: 1, 'creme fraiche': 1, mascarpone: 1, mozzarella: 1, parmesan: 1, '=feta': 1, gelatine: 1, ricotta: 1 };
+const ANIMAL = { bechamel: 1, milch: 1, sahne: 1, butter: 1, kase: 1, quark: 1, joghurt: 1, '=ei': 1, '=eier': 1, eigelb: 1, eiweiss: 1, honig: 1, schmand: 1, 'creme fraiche': 1, mascarpone: 1, mozzarella: 1, parmesan: 1, '=feta': 1, gelatine: 1, ricotta: 1 };
 
 const RULES = {
   kuchen: {
@@ -294,7 +297,7 @@ const RULES = {
   },
 };
 
-const CLASSIFIER_VERSION = 7;
+const CLASSIFIER_VERSION = 8;
 const OCR_VERSION = 3; // erhöhen, wenn sich die Texterkennung verbessert → alle Scans werden im Hintergrund neu gelesen // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
 const kwCache = new Map();
 function kwRegex(k) {

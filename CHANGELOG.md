@@ -1,6 +1,7 @@
 # Änderungen
 
 ## 2026-11-04
+- Lasagne & Co.: „fleischlos“, „Wer mag, kann auch Schinken dazugeben“ oder „Für Fleischesser …“ machen ein Gericht nicht mehr zum Fleischgericht; Béchamel zählt als nicht vegan
 - Deftige Kuchen (Spinatkuchen, Zwiebelkuchen, Quiche …) kommen unter Hauptgerichte und die neue Unterkategorie „Kuchen & Torten › Herzhafte Kuchen & Quiches“
 - Fotos von Zeitschriftenseiten: Hintergrund (z. B. Holztisch) wird vor dem Lesen abgeschnitten
 - Titel über mehrere Zeilen werden zusammengesetzt (z. B. „Salat mit / Erdnuss- / Chili-Soße / (Gado Gado)“)

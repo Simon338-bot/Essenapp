@@ -201,6 +201,12 @@ async function testLogic(browser) {
     ['Schwarzwälder Kirschtorte', 'Biskuitboden aus Eiern, Zucker, Mehl, Kakao. Boden waagerecht durchschneiden. Sahne steif schlagen, Kirschen einschichten.', ['kuchen/torten'], []],
     ['Streuselkuchen', 'Hefeteig auf dem Backblech ausrollen, Streusel darauf verteilen, bei 180 °C backen. Zucker, Mehl, Butter.', ['kuchen/blechkuchen'], []],
     ['Erdnussbutter-Brownies', '200 g Erdnussbutter, Zucker, Eier, Mehl, Schokolade. Verrühren und backen.', ['kuchen'], ['kuchen/ohne-backen', 'gebaeck']],
+    // Lasagne: nicht automatisch Fleisch
+    ['Gemüselasagne', 'Lasagneplatten, 2 Zucchini, 1 Aubergine, Paprika, Tomaten, Béchamelsoße aus Butter, Mehl und Milch, Mozzarella. In die Auflaufform schichten und backen.', ['hauptgerichte/vegetarisch'], ['hauptgerichte/fleisch', 'hauptgerichte/vegan']],
+    ['Spinat-Lasagne', '500 g Blattspinat, Ricotta, Lasagneplatten, Béchamel, Parmesan. Wer mag, kann auch Schinken dazugeben. In der Auflaufform backen.', ['hauptgerichte/vegetarisch'], ['hauptgerichte/fleisch']],
+    ['Fleischlose Lasagne', 'Lasagneplatten, Tomaten, Zucchini, Champignons, Béchamel, Käse. Eine fleischlose Variante. Im Ofen backen.', ['hauptgerichte/vegetarisch'], ['hauptgerichte/fleisch']],
+    ['Vegetarische Lasagne', 'Lasagneplatten, Spinat, Tomaten, Mozzarella. Tipp: Für Fleischesser 300 g Hackfleisch anbraten und untermischen.', ['hauptgerichte/vegetarisch'], ['hauptgerichte/fleisch']],
+    ['Lasagne Bolognese', 'Lasagneplatten, 500 g Hackfleisch, Zwiebel, Karotte, Tomaten, Rotwein, Béchamel, Parmesan.', ['hauptgerichte/fleisch'], ['hauptgerichte/vegetarisch']],
     // Deftige Kuchen → Hauptgericht + Herzhafte Kuchen; süße bleiben süß
     ['Spinatkuchen', '500 g Blattspinat, 200 g Feta, 3 Eier, 200 g Schmand, Knoblauch, Salz, Pfeffer, Muskat. Mürbeteig: 250 g Mehl, 125 g Butter, 1 Ei, 1 Prise Salz. In der Springform bei 180 °C backen.', ['hauptgerichte/vegetarisch', 'kuchen/herzhafte-kuchen-quiches'], ['kuchen/ruhrkuchen', 'kuchen/obstkuchen']],
     ['Zwiebelkuchen', '1 kg Zwiebeln, 150 g Speck, 200 g Schmand, 3 Eier, Kümmel, Salz, Pfeffer. Hefeteig auf dem Backblech ausrollen und backen.', ['hauptgerichte/fleisch', 'kuchen/herzhafte-kuchen-quiches'], ['kuchen/blechkuchen']],
