@@ -306,6 +306,56 @@ async function testStorageAndUpdate(browser) {
   await p.context().close(); await p2.context().close();
 }
 
+async function testTrashAndEdit(browser) {
+  console.log('\n— Papierkorb und Titel ändern —');
+  const p = await newApp(browser);
+  await scan(p, ['apfelkuchen.jpg', 'lachs.jpg']);
+  const lachs = find(await recipes(p), /Lachs/);
+  // Löschen über die Oberfläche → landet im Papierkorb
+  await p.goto(APP + '#/r/' + lachs.id); await sleep(300);
+  await p.click('[data-action=delete]'); await sleep(800);
+  check('Gelöschtes Rezept ist weg', !(await recipes(p)).some((r) => r.id === lachs.id));
+  await p.goto(APP + '#/papierkorb'); await sleep(800);
+  const inTrash = await p.$$eval('#trash-list .title', (e) => e.map((x) => x.textContent));
+  check('Gelöschtes Rezept steht unter „Zuletzt gelöscht“', inTrash.some((t) => /Lachs/.test(t)), inTrash.join(' | '));
+  check('Papierkorb zeigt das Foto', await p.$eval('#trash-list img', (i) => i.complete && i.naturalWidth > 50).catch(() => false));
+  await p.click(`[data-action=trash-restore][data-id="${lachs.id}"]`); await sleep(800);
+  const back = (await recipes(p)).find((r) => r.id === lachs.id);
+  check('Wiederherstellen mit Fotos', back && back.pages === 1 && /Lachs/.test(back.title), JSON.stringify(back));
+  check('Nach dem Wiederherstellen nicht mehr im Papierkorb', (await p.evaluate(async () => (await listTrash()).length)) === 0);
+  // Nur die 10 zuletzt gelöschten bleiben
+  await p.evaluate(async () => {
+    for (let i = 0; i < 12; i++) {
+      const r = { id: 'tmp' + i, title: 'Testrezept ' + i, cats: ['sonstiges'], subs: [], text: 'x', pages: [], created: Date.now() };
+      await saveRecipe(r);
+      await deleteRecipe(r.id);
+    }
+  });
+  const trash = await p.evaluate(async () => (await listTrash()).map((r) => r.title));
+  check('Papierkorb behält nur die 10 zuletzt gelöschten', trash.length === 10 && trash[0] === 'Testrezept 11' && !trash.includes('Testrezept 0'), trash.join(' | '));
+  // Titel ändern → Kategorien passen sich sofort an
+  const id = await p.evaluate(async () => {
+    const r = { id: 'neutral1', title: 'Mein Rezept', cats: ['sonstiges'], subs: [], text: 'Zutaten: Gurke, Zwiebel, Essig, Öl, Salz.', pages: [], created: Date.now(), scanned: true };
+    await saveRecipe(r); return r.id;
+  });
+  await p.goto(APP + '#/bearbeiten/' + id); await sleep(300);
+  await p.fill('#f-title', 'Kartoffelsalat'); await sleep(700);
+  const live = await p.$$eval('input[name=sub]:checked', (e) => e.map((x) => x.value));
+  check('Titel ändern setzt die Kategorie-Häkchen sofort neu', live.includes('beilagen/kartoffeln') && live.includes('beilagen/salate'), live.join(', '));
+  check('Hinweis zur neuen Einordnung wird angezeigt', await p.$eval('#auto-hint', (h) => !h.hidden && /Kategorien/.test(h.textContent)));
+  await p.click('form[data-action=save] button[type=submit]'); await sleep(600);
+  const saved = (await recipes(p)).find((r) => r.id === id);
+  check('Nach dem Speichern neu einsortiert', saved && saved.subs.includes('beilagen/kartoffeln') && !saved.cats.includes('sonstiges'), JSON.stringify(saved));
+  // Häkchen selbst gesetzt → Titeländerung überschreibt sie nicht
+  await p.goto(APP + '#/bearbeiten/' + id); await sleep(300);
+  await p.uncheck('input[name=cat][value="beilagen"]'); await p.check('input[name=cat][value="snacks"]');
+  await p.fill('#f-title', 'Gurkensalat'); await sleep(700);
+  const kept = await p.$$eval('input[name=cat]:checked', (e) => e.map((x) => x.value));
+  check('Selbst gesetzte Häkchen bleiben beim Titeländern', kept.includes('snacks') && !kept.includes('beilagen'), kept.join(', '));
+  check('Keine JavaScript-Fehler (Papierkorb/Bearbeiten)', p.errors.length === 0, p.errors.join(' | '));
+  await p.context().close();
+}
+
 async function testSync(browser) {
   console.log('\n— Familien-Rezeptbuch (mit GitHub-Nachbau) —');
   const api = `http://localhost:${GH_PORT}`;
@@ -336,6 +386,15 @@ async function testSync(browser) {
   await B.evaluate(() => sync()); await idle(B);
   const ta = await titles(A), tb = await titles(B);
   check('Neu, geändert, gelöscht und gleichzeitig gespeichert – überall gleich', ta === tb && /Apfelkuchen von Oma/.test(ta) && !/Lachs/.test(ta) && /Muffins/.test(ta) && /Linsensuppe/.test(ta), `A: ${ta} / B: ${tb}`);
+  // Von der Familie gelöscht → bei mir im Papierkorb; wiederhergestellt → bei allen wieder da
+  const lachsInTrashA = await A.evaluate(async () => (await listTrash()).find((r) => /Lachs/.test(r.title))?.id);
+  check('Von der Familie gelöschtes Rezept liegt im eigenen Papierkorb', !!lachsInTrashA);
+  if (lachsInTrashA) {
+    await A.evaluate(async (id) => { await restoreFromTrash(id); }, lachsInTrashA);
+    await sleep(2500); await idle(A); await A.evaluate(() => sync()); await idle(A);
+    await B.evaluate(() => sync()); await idle(B);
+    check('Wiederhergestelltes Rezept kommt bei der Familie zurück', /Lachs/.test(await titles(B)), await titles(B));
+  }
   await A.evaluate(async () => { const r = state.recipes[0]; r.fav = true; await saveRecipe(r, { quiet: true }); await sync(); });
   await B.evaluate(() => sync()); await idle(B);
   check('Favoriten bleiben persönlich', (await B.evaluate(() => state.recipes.filter((r) => r.fav).length)) === 0);
@@ -368,7 +427,7 @@ async function testUpdatePath(browser) {
     browser = await chromium.launch();
     await makeFixtures(browser);
     const only = process.argv[2];
-    const suites = { logic: testLogic, scan: testScanning, multi: testMultiPage, storage: testStorageAndUpdate, sync: testSync, pages: testUpdatePath };
+    const suites = { logic: testLogic, scan: testScanning, multi: testMultiPage, storage: testStorageAndUpdate, trash: testTrashAndEdit, sync: testSync, pages: testUpdatePath };
     for (const [name, fn] of Object.entries(suites)) {
       if (only && only !== name) continue;
       try { await fn(browser); } catch (err) { check(`Testblock „${name}“ ohne Absturz`, false, err.stack || err.message); }

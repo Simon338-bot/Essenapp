@@ -46,12 +46,12 @@ function toast(msg) {
 }
 
 // ---------- Speicher ----------
-const DB = (() => {
+const makeStore = (dbName) => (() => {
   let dbp;
   function open() {
     if (!dbp) {
       dbp = new Promise((res, rej) => {
-        const r = indexedDB.open('meine-rezepte', 1);
+        const r = indexedDB.open(dbName, 1);
         r.onupgradeneeded = () => r.result.createObjectStore('recipes', { keyPath: 'id' });
         r.onsuccess = () => res(r.result);
         r.onerror = () => rej(r.error);
@@ -75,6 +75,9 @@ const DB = (() => {
     del: (id) => run('readwrite', (s) => s.delete(id)),
   };
 })();
+const DB = makeStore('meine-rezepte');
+const TRASH = makeStore('meine-rezepte-papierkorb'); // die zuletzt gelöschten Rezepte
+const TRASH_MAX = 10;
 
 const LS = {
   get(key, fallback) {
@@ -126,8 +129,10 @@ async function saveRecipe(r, { remote = false, quiet = false } = {}) {
   delete searchCache[r.id];
   if (!remote && !quiet) scheduleSync();
 }
-async function deleteRecipe(id, { remote = false } = {}) {
+// trash: false = nicht in den Papierkorb (z. B. beim Zusammenführen)
+async function deleteRecipe(id, { remote = false, trash = true } = {}) {
   const r = recById(id);
+  if (r && trash) { try { await addToTrash(r); } catch (err) { console.warn(err); } }
   await DB.del(id);
   state.recipes = state.recipes.filter((x) => x.id !== id);
   dropUrls(id);
@@ -135,6 +140,32 @@ async function deleteRecipe(id, { remote = false } = {}) {
     LS.set('pendingDeletes', [...LS.get('pendingDeletes', []), id]);
     scheduleSync();
   }
+}
+
+// ---------- Papierkorb „Zuletzt gelöscht“ ----------
+async function addToTrash(r) {
+  await TRASH.put({ ...(await packRecipe(r)), deletedAt: Date.now() });
+  const all = (await TRASH.all()).sort((a, b) => b.deletedAt - a.deletedAt);
+  for (const old of all.slice(TRASH_MAX)) await TRASH.del(old.id);
+  state.trashCount = Math.min(all.length, TRASH_MAX);
+}
+async function listTrash() {
+  const all = (await TRASH.all()).sort((a, b) => b.deletedAt - a.deletedAt).slice(0, TRASH_MAX);
+  state.trashCount = all.length;
+  return all.map(unpackRecipe);
+}
+async function restoreFromTrash(id) {
+  const entry = (await TRASH.all()).find((x) => x.id === id);
+  if (!entry) return null;
+  const r = unpackRecipe(entry);
+  delete r.deletedAt;
+  r.synced = false; // wird wieder ins Familien-Rezeptbuch hochgeladen
+  LS.set('pendingDeletes', LS.get('pendingDeletes', []).filter((x) => x !== id));
+  dropUrls(id);
+  await saveRecipe(r);
+  await TRASH.del(id);
+  state.trashCount = Math.max(0, (state.trashCount || 1) - 1);
+  return r;
 }
 
 // Bild-URLs für gespeicherte Scans (Blobs)
@@ -1326,7 +1357,7 @@ async function mergeRecipes(r, other) {
   if (other.fav) r.fav = true;
   if (other.tags) r.tags = [r.tags, other.tags].filter(Boolean).join(', ');
   await appendPages(r, other.pages || [], texts);
-  await deleteRecipe(other.id);
+  await deleteRecipe(other.id, { trash: false });
 }
 
 // Bestehendes Rezept mit der aktuellen Texterkennung neu lesen (Bilder bleiben gleich)
@@ -1648,6 +1679,29 @@ function viewRecipe(id) {
     <p class="center" style="margin-top:18px"><button class="linkbtn" data-action="report" data-id="${esc(r.id)}">⚠️ Falsch erkannt? An die tägliche Prüfung melden</button></p>`;
 }
 
+function viewTrash() {
+  setTab('settings');
+  topbar({ title: 'Zuletzt gelöscht', back: '#/einstellungen' });
+  setTimeout(async () => {
+    const box = $('#trash-list');
+    if (!box) return;
+    const list = await listTrash();
+    box.innerHTML = list.length ? `<div class="rec-grid">${list.map((r) => {
+      const t = r.thumb ? blobUrl(`trash:${r.id}:thumb`, r.thumb) : (r.image || '');
+      return `<div class="rec-card">
+        <div class="thumb ${t ? 'scan' : ''}">${t ? `<img src="${t}" alt="" loading="lazy">` : recipeEmoji(r)}</div>
+        <div class="body"><div class="title">${esc(r.title)}</div>
+          <div class="meta"><span>gelöscht ${esc(ago(r.deletedAt))}</span></div>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn primary" style="padding:8px 12px;font-size:.88rem" data-action="trash-restore" data-id="${esc(r.id)}">↩︎ Wiederherstellen</button>
+            <button class="btn danger" style="padding:8px 12px;font-size:.88rem" data-action="trash-purge" data-id="${esc(r.id)}" aria-label="Endgültig löschen">🗑️</button>
+          </div></div></div>`;
+    }).join('')}</div>` : '<div class="empty"><span class="big">🗑️</span>Der Papierkorb ist leer.</div>';
+  });
+  return `<p class="muted" style="margin-top:4px">Hier findest du die ${TRASH_MAX} zuletzt gelöschten Rezepte – mit allen Fotos. Ältere werden automatisch endgültig entfernt.</p>
+    <div id="trash-list"><div class="empty"><span class="spin"></span></div></div>`;
+}
+
 function viewMerge(id) {
   const r = recById(id);
   if (!r) return viewNotFound();
@@ -1733,6 +1787,7 @@ function viewEdit(id) {
     <div class="field">
       <label for="f-title">Name des Rezepts</label>
       <input type="text" id="f-title" name="title" required value="${esc(r.title)}">
+      <p class="hint" id="auto-hint" hidden style="margin:6px 2px 0;color:var(--accent)"></p>
     </div>
     <div class="field">
       <span class="label">Kategorien <span class="hint">– auch mehrere möglich</span></span>
@@ -1782,6 +1837,10 @@ function viewSettings() {
       </div>
       <p class="muted" style="font-size:.85rem;margin-bottom:0">„Neu lesen“ liest die Scans noch einmal mit der aktuellen Texterkennung – sinnvoll nach einem Update.</p>
     </div>
+
+    <a class="card trash-link" href="#/papierkorb" style="display:flex;align-items:center;gap:12px;margin-top:22px">
+      <span style="font-size:1.6rem">🗑️</span><span style="flex:1"><b>Zuletzt gelöscht</b><br><span class="muted" style="font-size:.88rem">Die ${TRASH_MAX} zuletzt gelöschten Rezepte wiederherstellen</span></span>
+      <span class="chip">${state.trashCount || 0}</span><span>›</span></a>
 
     <div class="section-title">💾 Sicherung</div>
     <div class="card" style="margin-top:0">
@@ -1855,6 +1914,7 @@ function render() {
   else if (p[0] === 'einstellungen') html = viewSettings();
   else if (p[0] === 'verbinden') html = viewJoin(params.get('c') || '');
   else if (p[0] === 'zusammen') html = viewMerge(p[1]);
+  else if (p[0] === 'papierkorb') html = viewTrash();
   else html = viewNotFound();
   const y = render.keepScroll ? scrollY : 0;
   $('#app').innerHTML = html;
@@ -1977,10 +2037,24 @@ document.addEventListener('click', async (e) => {
     }
     case 'delete': {
       const r = recById(id);
-      if (!confirm(`„${r.title}“ wirklich löschen?`)) return;
+      if (!confirm(`„${r.title}“ löschen?\n\nDu findest es danach unter ⚙️ Mehr → „Zuletzt gelöscht“ und kannst es wiederherstellen.`)) return;
       await deleteRecipe(id);
-      toast('Rezept gelöscht');
+      toast('Gelöscht – unter „Zuletzt gelöscht“ wiederherstellbar');
       location.hash = state.lastList && !state.lastList.includes(id) ? state.lastList : '#/';
+      break;
+    }
+    case 'trash-restore': {
+      el.disabled = true;
+      const r = await restoreFromTrash(id);
+      if (r) { toast(`„${r.title}“ ist wieder da ✓`); location.hash = `#/r/${encodeURIComponent(r.id)}`; }
+      break;
+    }
+    case 'trash-purge': {
+      if (!confirm('Dieses Rezept endgültig löschen? Das kann nicht rückgängig gemacht werden.')) break;
+      await TRASH.del(id);
+      for (const [k, u] of urlCache) if (k.startsWith(`trash:${id}:`)) { URL.revokeObjectURL(u); urlCache.delete(k); }
+      toast('Endgültig gelöscht');
+      render();
       break;
     }
     case 'reclassify': {
@@ -1989,6 +2063,7 @@ document.addEventListener('click', async (e) => {
       $$('input[name=cat]', f).forEach((i) => { i.checked = cats.includes(i.value); });
       $$('input[name=sub]', f).forEach((i) => { i.checked = subs.includes(i.value); });
       f.dataset.auto = '1';
+      delete f.dataset.touched;
       toast('Neu einsortiert – zum Übernehmen speichern');
       break;
     }
@@ -2118,11 +2193,38 @@ document.addEventListener('change', async (e) => {
     const main = el.closest('.cp')?.querySelector('input[name=cat]');
     if (main) main.checked = true;
   }
+  // Häkchen selbst gesetzt → ab jetzt nicht mehr automatisch ändern
+  if ((el.name === 'cat' || el.name === 'sub') && el.closest('form[data-action=save]')) {
+    const f = el.closest('form');
+    f.dataset.touched = '1';
+    delete f.dataset.auto;
+    const hint = $('#auto-hint', f); if (hint) hint.hidden = true;
+  }
 });
 
-let searchDebounce;
+let searchDebounce, editDebounce;
 document.addEventListener('input', (e) => {
   const el = e.target;
+  // Titel oder Text geändert → Kategorien sofort neu vorschlagen (solange keine Häkchen selbst gesetzt wurden)
+  const ef = el.closest && el.closest('form[data-action=save]');
+  if (ef && (el.name === 'title' || el.name === 'text')) {
+    clearTimeout(editDebounce);
+    editDebounce = setTimeout(() => {
+      if (ef.dataset.touched) return;
+      const r = recById(ef.dataset.id);
+      const { cats, subs } = classify(ef.elements.text.value, ef.elements.title.value);
+      const before = JSON.stringify([r.cats, r.subs]);
+      $$('input[name=cat]', ef).forEach((i) => { i.checked = cats.includes(i.value); });
+      $$('input[name=sub]', ef).forEach((i) => { i.checked = subs.includes(i.value); });
+      ef.dataset.auto = '1';
+      const hint = $('#auto-hint', ef);
+      if (hint) {
+        const names = cats.map((c) => catById(c)?.name).filter(Boolean).join(', ');
+        hint.hidden = false;
+        hint.textContent = JSON.stringify([cats, subs]) !== before ? `🤖 Kategorien passend zum neuen Titel geändert: ${names}` : `🤖 Kategorien passen weiterhin: ${names}`;
+      }
+    }, 350);
+  }
   if (el.name === 'q' && el.closest('[data-action=search-form]')) {
     if (!location.hash.startsWith('#/suche')) { location.hash = `#/suche?q=${encodeURIComponent(el.value)}`; return; }
     clearTimeout(searchDebounce);
@@ -2185,6 +2287,7 @@ document.addEventListener('submit', async (e) => {
     if (!cats.length) { toast('Bitte wähle mindestens eine Kategorie'); return; }
     const subs = fd.getAll('sub').filter((s) => cats.includes(s.split('/')[0]));
     const catsChanged = JSON.stringify([cats, subs]) !== JSON.stringify([r.cats, r.subs]);
+    if (title !== r.title && !f.dataset.touched) f.dataset.auto = '1'; // neuer Titel → Einordnung folgt dem Titel
     if (title !== r.title) r.manualTitle = true;
     if (f.dataset.auto) r.manualCats = false;
     else if (catsChanged) r.manualCats = true;
@@ -2618,7 +2721,7 @@ async function init() {
   }
   // Umstellung auf die Scan-Version: alte Beispielrezepte entfernen
   if (!LS.get('v2', false)) {
-    for (const r of [...state.recipes]) if (!r.pages && OLD_EXAMPLES.includes(r.title)) await deleteRecipe(r.id);
+    for (const r of [...state.recipes]) if (!r.pages && OLD_EXAMPLES.includes(r.title)) await deleteRecipe(r.id, { trash: false });
     LS.set('v2', true);
   }
   if (LS.get('classifier', 0) < CLASSIFIER_VERSION) {
@@ -2639,6 +2742,7 @@ async function init() {
     }
     LS.set('classifier', CLASSIFIER_VERSION);
   }
+  try { await listTrash(); } catch { state.trashCount = 0; }
   render();
   window.APP_STARTED = true;
   try { sessionStorage.removeItem('repair'); } catch { /* */ }

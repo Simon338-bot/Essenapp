@@ -1,5 +1,9 @@
 # Änderungen
 
+## 2026-11-05
+- Neuer Papierkorb „Zuletzt gelöscht“ (⚙️ Mehr): die 10 zuletzt gelöschten Rezepte mit Fotos wiederherstellen – auch wenn jemand aus der Familie gelöscht hat
+- Titel ändern ordnet das Rezept sofort passend neu ein (solange die Kategorie-Häkchen nicht selbst gesetzt wurden)
+
 ## 2026-11-04
 - Texterkennung liest jetzt immer im gleichen Modus (Spaltenerkennung) – vorher wurde die erste Seite eines Stapels anders gelesen als die übrigen
 - Schriftgröße für die Titelwahl wird an den Buchstaben gemessen; Fließtextzeilen werden nicht mehr als Titel gewählt; Titel werden auch nach oben zusammengesetzt
