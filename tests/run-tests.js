@@ -201,6 +201,14 @@ async function testLogic(browser) {
     ['Schwarzwälder Kirschtorte', 'Biskuitboden aus Eiern, Zucker, Mehl, Kakao. Boden waagerecht durchschneiden. Sahne steif schlagen, Kirschen einschichten.', ['kuchen/torten'], []],
     ['Streuselkuchen', 'Hefeteig auf dem Backblech ausrollen, Streusel darauf verteilen, bei 180 °C backen. Zucker, Mehl, Butter.', ['kuchen/blechkuchen'], []],
     ['Erdnussbutter-Brownies', '200 g Erdnussbutter, Zucker, Eier, Mehl, Schokolade. Verrühren und backen.', ['kuchen'], ['kuchen/ohne-backen', 'gebaeck']],
+    // Deftige Kuchen → Hauptgericht + Herzhafte Kuchen; süße bleiben süß
+    ['Spinatkuchen', '500 g Blattspinat, 200 g Feta, 3 Eier, 200 g Schmand, Knoblauch, Salz, Pfeffer, Muskat. Mürbeteig: 250 g Mehl, 125 g Butter, 1 Ei, 1 Prise Salz. In der Springform bei 180 °C backen.', ['hauptgerichte/vegetarisch', 'kuchen/herzhafte-kuchen-quiches'], ['kuchen/ruhrkuchen', 'kuchen/obstkuchen']],
+    ['Zwiebelkuchen', '1 kg Zwiebeln, 150 g Speck, 200 g Schmand, 3 Eier, Kümmel, Salz, Pfeffer. Hefeteig auf dem Backblech ausrollen und backen.', ['hauptgerichte/fleisch', 'kuchen/herzhafte-kuchen-quiches'], ['kuchen/blechkuchen']],
+    ['Quiche Lorraine', 'Mürbeteig, 200 g Speck, 150 g Bergkäse, 4 Eier, 200 ml Sahne, Muskat, Pfeffer. In der Tarteform backen.', ['hauptgerichte/fleisch', 'kuchen/herzhafte-kuchen-quiches'], []],
+    ['Kuchen mit Brokkoli und Lachs', 'Brokkoli, 200 g Lachs, Eier, Sahne, Dill, Salz, Pfeffer, Knoblauch. In der Springform backen.', ['hauptgerichte/fisch', 'kuchen/herzhafte-kuchen-quiches'], []],
+    ['Rüblikuchen', '400 g Möhren, 250 g Zucker, 300 g gemahlene Mandeln, 5 Eier, Zimt, Puderzucker. Springform, 60 Minuten backen.', ['kuchen/ruhrkuchen'], ['kuchen/herzhafte-kuchen-quiches', 'hauptgerichte']],
+    ['Schoko-Zucchini-Kuchen', '300 g Zucchini, 200 g Zucker, 100 g Kakao, 200 g Schokolade, Mehl, Eier, Backpulver. In der Kastenform backen.', ['kuchen'], ['kuchen/herzhafte-kuchen-quiches', 'hauptgerichte']],
+    ['Kürbiskuchen', '500 g Kürbis, 200 g Zucker, Zimt, Ingwer, Eier, Mehl, Backpulver. Springform, 50 Minuten backen.', ['kuchen'], ['kuchen/herzhafte-kuchen-quiches', 'hauptgerichte']],
   ];
   for (const [t, x, want, notWant] of cls) {
     const r = await p.evaluate(([t, x]) => classify(x, t), [t, x]);
@@ -246,6 +254,14 @@ async function testStorageAndUpdate(browser) {
   await p.goto(APP + '#/r/alt1'); await sleep(400);
   check('Altes Bild wird angezeigt', await p.$eval('.scan-page img', (i) => i.complete && i.naturalWidth === 60).catch(() => false));
   check('Selbst gesetzte Kategorie bleibt', (await recipes(p)).find((r) => r.id === 'alt1').cats.join() === 'kuchen');
+  // Alte gespeicherte Kategorien bekommen die neue Unterkategorie „Herzhafte Kuchen & Quiches“
+  await p.evaluate(() => {
+    const cats = buildDefaultCategories();
+    cats.find((c) => c.id === 'kuchen').subs = cats.find((c) => c.id === 'kuchen').subs.filter((x) => x.id !== 'herzhafte-kuchen-quiches');
+    localStorage.setItem('rezepte.categories', JSON.stringify(cats)); localStorage.removeItem('rezepte.subHerzhaft');
+  });
+  await p.reload(); await p.waitForFunction(() => window.APP_STARTED === true);
+  check('Neue Unterkategorie wird bei alten Kategorien ergänzt', await p.evaluate(() => !!subById(catById('kuchen'), 'herzhafte-kuchen-quiches')));
   // Kategorie anlegen
   await p.goto(APP + '#/einstellungen'); await sleep(300);
   await p.evaluate(() => { window.prompt = () => 'Grillen'; });

@@ -14,7 +14,7 @@ const DEFAULT_CATEGORIES = [
   { id: 'hauptgerichte', name: 'Hauptgerichte', emoji: '🍽️', subs: ['Fisch', 'Fleisch', 'Geflügel', 'Vegetarisch', 'Vegan', 'Nudeln', 'Aufläufe'] },
   { id: 'beilagen', name: 'Beilagen & Salate', emoji: '🥔', subs: ['Salate', 'Kartoffeln', 'Gemüse', 'Reis & Getreide', 'Saucen & Dips'] },
   { id: 'nachspeisen', name: 'Nachspeisen', emoji: '🍮', subs: ['Cremes & Puddings', 'Eis & Sorbet', 'Obst', 'Warme Desserts', 'Vegan'] },
-  { id: 'kuchen', name: 'Kuchen & Torten', emoji: '🍰', subs: ['Blechkuchen', 'Torten', 'Rührkuchen', 'Obstkuchen', 'Käsekuchen', 'Muffins & Cupcakes', 'Ohne Backen'] },
+  { id: 'kuchen', name: 'Kuchen & Torten', emoji: '🍰', subs: ['Blechkuchen', 'Torten', 'Rührkuchen', 'Obstkuchen', 'Käsekuchen', 'Muffins & Cupcakes', 'Ohne Backen', 'Herzhafte Kuchen & Quiches'] },
   { id: 'gebaeck', name: 'Plätzchen & Gebäck', emoji: '🍪', subs: ['Weihnachtsplätzchen', 'Kekse', 'Hefegebäck', 'Herzhaftes Gebäck'] },
   { id: 'geburtstag', name: 'Geburtstag & Feste', emoji: '🎉', subs: ['Geburtstagskuchen', 'Kindergeburtstag', 'Fingerfood', 'Party-Buffet', 'Weihnachten', 'Ostern'] },
   { id: 'snacks', name: 'Snacks & Fingerfood', emoji: '🥨', subs: ['Herzhaft', 'Süß', 'Dips & Aufstriche'] },
@@ -294,7 +294,7 @@ const RULES = {
   },
 };
 
-const CLASSIFIER_VERSION = 6;
+const CLASSIFIER_VERSION = 7;
 const OCR_VERSION = 3; // erhöhen, wenn sich die Texterkennung verbessert → alle Scans werden im Hintergrund neu gelesen // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
 const kwCache = new Map();
 function kwRegex(k) {
@@ -371,6 +371,14 @@ function classify(text, title) {
   }
   if ((scores.geburtstag || 0) >= 5) cats.push('geburtstag');
   if (!cats.length) cats.push(catById('sonstiges') ? 'sonstiges' : state.categories[0]?.id);
+  // Deftige Kuchen (Spinatkuchen, Zwiebelkuchen, Quiche …) → Hauptgericht + Kuchen › Herzhafte Kuchen
+  const savoryCake = isSavoryCake(body, ti, scores);
+  if (savoryCake) {
+    for (const c of ['gebaeck', 'nachspeisen', 'kuchen', 'hauptgerichte']) { const k = cats.indexOf(c); if (k >= 0) cats.splice(k, 1); }
+    if (catById('hauptgerichte')) cats.unshift('hauptgerichte');
+    if (catById('kuchen') && subById(catById('kuchen'), 'herzhafte-kuchen-quiches')) cats.splice(1, 0, 'kuchen');
+    const k = cats.indexOf('sonstiges'); if (k >= 0 && cats.length > 1) cats.splice(k, 1);
+  }
   // Kartoffeln als Hauptzutat (im Titel, mehrfach genannt oder in größerer Menge) → auch unter Beilagen › Kartoffeln
   const potato = /kartoffel/.test(ti) || (body.match(/kartoffel/g) || []).length >= 3
     || /(\d{3,}\s*g|\d+([.,]\d+)?\s*kg)\s+(\w+\s+)?\w*kartoffel/.test(body) || /\b([4-9]|1\d)\s+(\w+\s+)?\w*kartoffel/.test(body);
@@ -388,6 +396,7 @@ function classify(text, title) {
     if (!cat || !rule) continue;
     const add = (sid) => { if (subById(cat, sid) && !subs.includes(`${cid}/${sid}`)) subs.push(`${cid}/${sid}`); };
     if (cid === 'beilagen' && onlyPotato) { add('kartoffeln'); continue; } // nur wegen der Kartoffeln dabei
+    if (cid === 'kuchen' && savoryCake) { add('herzhafte-kuchen-quiches'); continue; }
     const said = (sid) => subMention[`${cid}/${sid}`] || 0;
     if (rule.savory) {
       const veggieSaid = said('vegetarisch') || said('vegan');
@@ -415,6 +424,30 @@ function classify(text, title) {
     if (cid === 'geburtstag' && cats.includes('kuchen') && !subs.some((s) => s.startsWith('geburtstag/'))) add('geburtstagskuchen');
   }
   return { cats, subs };
+}
+
+// ---------- Süß oder deftig? ----------
+const SAVORY_WORDS = ['spinat', 'zwiebel', 'lauch', 'porree', 'speck', 'schinken', 'feta', 'bergkase', 'gouda', 'parmesan', 'emmentaler', 'ziegenkase',
+  'mozzarella', 'pfeffer', 'muskat', 'knoblauch', 'tomate', 'zucchini', 'brokkoli', 'pilz', 'champignon', 'kartoffel', 'mangold', 'spargel', 'lachs',
+  'thunfisch', 'hackfleisch', 'salami', 'oliven', 'paprika', 'kase', 'kraut', 'wirsing', 'erbsen', 'mais', 'thymian', 'rosmarin', 'oregano', 'basilikum',
+  'schnittlauch', 'petersilie', 'chili', 'kummel', 'bacon', 'hahnchen', 'gemuse', 'fenchel', 'rucola', 'kase-', 'pesto', 'senf'];
+const SWEET_WORDS = ['puderzucker', 'vanille', 'schokolade', 'kakao', 'marmelade', 'konfitur', 'sahnesteif', 'pudding', 'zimt', 'honig', 'apfel', 'kirsch',
+  'beere', 'zwetschg', 'pflaum', 'aprikos', 'rhabarber', 'banane', 'mandarin', 'rosinen', 'marzipan', 'nougat', 'karamell', 'zuckerguss', 'glasur', 'kuvertur',
+  'rum', 'eierlikor', 'mohn', 'kokosraspel', 'streusel', 'mascarpone', 'quark'];
+const SAVORY_CAKE_TITLE = /(spinat|zwiebel|lauch|porree|speck|schinken|gemuse|tomaten|zucchini|kartoffel|pilz|champignon|brokkoli|mangold|spargel|feta|ziegenkase|lachs|thunfisch|hackfleisch|pizza|flamm|sauerkraut|kraut|wirsing|kase-?lauch|lauch-?kase|mais|paprika|oliven|fenchel|bacon|salami|herzhaft\w*|deftig\w*|pikant\w*)[\s-]*(kuchen|torte|tarte|quiche|pie|wahe|waihe)/;
+// Erkennt deftige Kuchen: Spinatkuchen, Zwiebelkuchen, Quiche Lorraine, Lauch-Speck-Tarte …
+function isSavoryCake(body, ti, scores) {
+  const cakeish = (scores.kuchen || 0) > 0 || /quiche|tarte|flammkuchen|zwiebelkuchen|wahe|waihe|pie/.test(body + ' ' + ti);
+  if (!cakeish) return false;
+  const count = (list, t) => list.filter((w) => t.includes(w)).length;
+  const savory = count(SAVORY_WORDS, body);
+  let sweet = count(SWEET_WORDS, body);
+  if (/\d{2,}\s*g\s*(brauner\s*|weisser\s*)?zucker|\d\s*(tassen?|becher)\s*zucker/.test(body)) sweet += 2; // richtige Menge Zucker, nicht nur eine Prise
+  if (/\b(salz|pfeffer)\s+(und|&)\s+(pfeffer|salz)\b|mit salz (und|&) pfeffer|salzen (und|&) pfeffern/.test(body)) sweet -= 1;
+  const sweetTitle = /schoko|apfel|kirsch|beere|zimt|vanille|rubli|karotten|mohren|nuss|mandel|zucker|honig|karamell|banane|marzipan/.test(ti);
+  // Name klingt deftig (Spinatkuchen, Quiche …) – gilt, solange das Rezept nicht deutlich süß ist
+  if (/quiche|flammkuchen|zwiebelkuchen/.test(ti) || SAVORY_CAKE_TITLE.test(ti)) return !sweetTitle && sweet < 3;
+  return savory >= 3 && savory >= sweet * 2 + 2;
 }
 
 // ---------- Titel aus dem erkannten Text bestimmen ----------
@@ -626,7 +659,7 @@ function autoTitle(text, cats, subs, badTitle = '') {
     return owner && !norm(dish).startsWith(norm(owner)) ? `${owner} ${dish}` : dish;
   }
   const cid = cats[0], sid = (subs.find((k) => k.startsWith(cid + '/')) || '').split('/')[1];
-  const kuchenSub = { blechkuchen: 'Blechkuchen', ruhrkuchen: 'Rührkuchen', obstkuchen: 'Obstkuchen', kasekuchen: 'Käsekuchen', torten: 'Torte', 'muffins-cupcakes': 'Muffins', 'ohne-backen': 'Kuchen ohne Backen' };
+  const kuchenSub = { blechkuchen: 'Blechkuchen', ruhrkuchen: 'Rührkuchen', obstkuchen: 'Obstkuchen', kasekuchen: 'Käsekuchen', torten: 'Torte', 'muffins-cupcakes': 'Muffins', 'ohne-backen': 'Kuchen ohne Backen', 'herzhafte-kuchen-quiches': 'Herzhafter Kuchen' };
   const labels = { vorspeisen: 'Vorspeise', suppen: 'Suppe', hauptgerichte: 'Hauptgericht', beilagen: sid === 'salate' ? 'Salat' : 'Beilage',
     nachspeisen: 'Dessert', kuchen: kuchenSub[sid] || 'Kuchen', gebaeck: sid === 'weihnachtsplatzchen' ? 'Plätzchen' : 'Gebäck', geburtstag: 'Party-Rezept',
     snacks: 'Snack', fruehstueck: sid === 'brot' ? 'Brot' : sid === 'brotchen' ? 'Brötchen' : 'Frühstück', getraenke: 'Getränk' };
@@ -1477,7 +1510,7 @@ function subEmoji(name, fallback) {
   const n = norm(name);
   const map = [['fisch', '🐟'], ['fleisch', '🥩'], ['geflugel', '🍗'], ['vegan', '🌱'], ['vegetar', '🥦'], ['nudel', '🍝'], ['auflauf', '🫕'],
     ['salat', '🥗'], ['kartoffel', '🥔'], ['gemuse', '🥕'], ['reis', '🍚'], ['sauce', '🫙'], ['dip', '🫙'], ['creme', '🍮'], ['eis', '🍨'],
-    ['obstkuchen', '🍓'], ['obst', '🍓'], ['warm', '🔥'], ['blech', '🟫'], ['geburtstagskuchen', '🎂'], ['torte', '🎂'], ['ruhr', '🧁'],
+    ['obstkuchen', '🍓'], ['obst', '🍓'], ['warm', '🔥'], ['herzhafte kuchen', '🥧'], ['blech', '🟫'], ['geburtstagskuchen', '🎂'], ['torte', '🎂'], ['ruhr', '🧁'],
     ['kase', '🧀'], ['muffin', '🧁'], ['ohne backen', '❄️'], ['weihnacht', '🎄'], ['kekse', '🍪'], ['hefe', '🥯'], ['herzhaft', '🥨'],
     ['kinder', '🎈'], ['finger', '🍢'], ['buffet', '🍱'], ['ostern', '🐣'], ['suss', '🍬'], ['aufstrich', '🧈'], ['brotchen', '🥖'], ['brot', '🍞'],
     ['fruhstuck', '🍳'], ['ohne alkohol', '🧃'], ['mit alkohol', '🍷'], ['smoothie', '🥤'], ['heiss', '☕']];
@@ -2507,6 +2540,12 @@ async function init() {
   state.categories = LS.get('categories', null) || buildDefaultCategories();
   if (!catById('sonstiges')) state.categories.push({ id: 'sonstiges', name: 'Noch nicht zugeordnet', emoji: '📄', subs: [] });
   LS.set('categories', state.categories);
+  // Neue Unterkategorie „Herzhafte Kuchen & Quiches“ einmalig ergänzen
+  const kc = catById('kuchen');
+  if (kc && !LS.get('subHerzhaft', false)) {
+    if (!subById(kc, 'herzhafte-kuchen-quiches')) { kc.subs.push({ id: 'herzhafte-kuchen-quiches', name: 'Herzhafte Kuchen & Quiches' }); saveCategories(); }
+    LS.set('subHerzhaft', true);
+  }
   try {
     const stored = await DB.all();
     state.recipes = stored.map(unpackRecipe);
