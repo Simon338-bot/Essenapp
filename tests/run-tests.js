@@ -74,6 +74,15 @@ async function makeFixtures(browser) {
   await p.setViewportSize({ width: 1500, height: 2000 });
   await shot(zeit('ZEIT MAGAZIN', 30), 'zeit-holztisch.jpg', { quality: 72 });
   await shot(zeit('BRIGITTE', 90), 'brigitte-holztisch.jpg', { quality: 72 });
+  // Zeitungsseite: Titel und Zutatenzeile gleich groß und fett direkt untereinander
+  await p.setViewportSize({ width: 2000, height: 1400 });
+  await shot(`<html><body style="margin:0;width:2000px;height:1400px;overflow:hidden;background:repeating-linear-gradient(80deg,#8a5a32 0 18px,#9b6a3e 18px 40px)">
+    <div style="position:absolute;left:60px;top:40px;width:1880px;height:1300px;background:#efe9dc;transform:rotate(-0.5deg);filter:blur(0.6px);font-family:'DejaVu Serif';color:#222">
+      <div style="position:absolute;left:90px;top:0;width:1700px;height:330px;background:linear-gradient(90deg,#2f7d32,#b3262a 50%,#d8d2b8)"></div>
+      <div style="position:absolute;left:90px;top:380px;width:1720px;font-family:'DejaVu Sans';font-weight:bold;font-size:27px;line-height:1.45">Pasta mit Spargel und frischen Erbsen<br>Zutaten für 2 bis 3 Personen: 500 g grüner Spargel, 50 g Butter, Salz, Pfeffer, 250 g frische Erbsen (ohne Schoten gewogen),<br>70 g Pecorino (oder ein fester Ziegenkäse), Blättchen von 1 Zweig frischer Minze, ungefähr 300 g Spaghetti</div>
+      <div style="position:absolute;left:90px;top:520px;width:1720px;columns:3;column-gap:60px;font-size:27px;line-height:1.45;text-align:justify">Eine Zeitlang habe ich versucht, mir das Pastaessen abzugewöhnen. Hier ist ein tolles Pastarezept: Die Enden der grünen Spargel entfernen, den Spargel waschen und in Scheiben schneiden. Butter in einer Pfanne zerlassen und darin den Spargel schwenken. Etwas Salz und Pfeffer hinzufügen. Die Erbsen aus den Schoten holen und zum Spargel geben. Pecorino reiben und zum Gemüse geben. Die Minzeblättchen fein hacken und unterheben. Die Spaghetti in die Pfanne geben. Sofort servieren.</div>
+      <div style="position:absolute;left:90px;top:1180px;font-size:24px">Von <i>Elisabeth Raether</i></div>
+    </div></body></html>`, 'pasta-zeitung.jpg', { quality: 70 });
   // PDF mit Textebene + Bild-PDF (zweite Seite leer)
   await p.setViewportSize({ width: 1240, height: 1754 });
   await p.setContent(recipePage('Bunte Muffins zum Kindergeburtstag', 'Für 12 Stück', ['200 g Mehl', '2 TL Backpulver', '150 g Zucker', '2 Eier', '120 ml Öl', '200 ml Milch', 'bunte Smarties'], 'Den Ofen auf 180 °C vorheizen. Alle Zutaten verrühren, in Muffinförmchen füllen und 20 Minuten backen.').replace('padding:110px 120px', 'padding:40px'));
@@ -115,7 +124,7 @@ const has = (r, ...keys) => r && keys.every((k) => (k.includes('/') ? r.subs.inc
 async function testScanning(browser) {
   console.log('\n— Scannen, Titel, Kategorien —');
   const p = await newApp(browser);
-  await scan(p, ['apfelkuchen.jpg', 'lachs.jpg', 'linsensuppe.jpg', 'muffins.pdf', 'scan_0001.pdf', 'frau-holle-foto.jpg', 'zeitschrift.jpg', 'zeit-holztisch.jpg']);
+  await scan(p, ['apfelkuchen.jpg', 'lachs.jpg', 'linsensuppe.jpg', 'muffins.pdf', 'scan_0001.pdf', 'frau-holle-foto.jpg', 'zeitschrift.jpg', 'zeit-holztisch.jpg', 'pasta-zeitung.jpg']);
   const list = await recipes(p);
   const exp = [
     [/^Omas gedeckter Apfelkuchen$/, ['kuchen/obstkuchen']],
@@ -126,13 +135,15 @@ async function testScanning(browser) {
     [/^Frau Holle Kuchen$/, ['kuchen/blechkuchen']],
     [/^Rhabarber-Cheesecake$/, ['kuchen/kasekuchen']],
     [/^Salat mit Erdnuss-Chili-Soße \(Gado Gado\)$/, ['beilagen/salate']],
+    [/^Pasta mit Spargel und frischen Erbsen$/, ['hauptgerichte/vegetarisch', 'hauptgerichte/nudeln']],
   ];
   for (const [re, subs] of exp) {
     const r = find(list, re);
     check(`Scan erkannt: ${re.source.replace(/[\^$]/g, '')}`, has(r, ...subs), r ? `${r.title} → ${r.subs.join(', ')}` : 'nicht gefunden. Titel: ' + list.map((x) => x.title).join(' | '));
   }
   check('Frau Holle nicht unter Torten', !has(find(list, /Frau Holle/), 'kuchen/torten'));
-  check('Leere PDF-Seite übersprungen', list.length === 8, `${list.length} Rezepte`);
+  check('Leere PDF-Seite übersprungen', list.length === 9, `${list.length} Rezepte`);
+  check('Salat mit „Backblech“ im Text ist kein herzhafter Kuchen', !has(find(list, /Gado Gado/), 'kuchen'), find(list, /Gado Gado/)?.subs.join(', '));
   // Großer Zeitschriftenname über dem Titel darf nicht Titel werden (eigener Scan-Durchlauf)
   const p3 = await newApp(browser);
   await scan(p3, ['brigitte-holztisch.jpg']);
@@ -142,7 +153,12 @@ async function testScanning(browser) {
   // Suche
   const search = async (q) => { await p.goto(APP + '#/suche?q=' + encodeURIComponent(q)); await sleep(250); return p.$$eval('.rec-card .title', (e) => e.map((x) => x.textContent)); };
   const sq = [['Ich suche einen Apfelkuchen', 'Omas gedeckter Apfelkuchen'], ['Apfelkuhcen', 'Omas gedeckter Apfelkuchen'], ['etwas mit Lachs', 'Lachsfilet mit Senf-Dill-Soße'], ['Kokosmilch', 'Rote Linsensuppe'], ['Suppe ohne Fleisch', 'Rote Linsensuppe'], ['Kindergeburtstag', 'Bunte Muffins zum Kindergeburtstag']];
-  for (const [q, want] of sq) { const res = await search(q); check(`Suche „${q}“`, res[0] === want, res.join(' | ') || 'keine Treffer'); }
+  for (const [q, want] of sq) {
+    const res = await search(q);
+    // „Kokosmilch“ steht in mehreren Rezepten – dann muss das gesuchte nur dabei sein
+    const ok = q === 'Kokosmilch' ? res.includes(want) : res[0] === want;
+    check(`Suche „${q}“`, ok, res.join(' | ') || 'keine Treffer');
+  }
   const veg = await search('vegan');
   check('Suche „vegan“ findet nur Veganes', veg.length === 1 && veg[0] === 'Rote Linsensuppe', veg.join(' | '));
   // Rezeptansicht, Neu lesen, Drehen
@@ -201,6 +217,7 @@ async function testLogic(browser) {
     ['Schwarzwälder Kirschtorte', 'Biskuitboden aus Eiern, Zucker, Mehl, Kakao. Boden waagerecht durchschneiden. Sahne steif schlagen, Kirschen einschichten.', ['kuchen/torten'], []],
     ['Streuselkuchen', 'Hefeteig auf dem Backblech ausrollen, Streusel darauf verteilen, bei 180 °C backen. Zucker, Mehl, Butter.', ['kuchen/blechkuchen'], []],
     ['Erdnussbutter-Brownies', '200 g Erdnussbutter, Zucker, Eier, Mehl, Schokolade. Verrühren und backen.', ['kuchen'], ['kuchen/ohne-backen', 'gebaeck']],
+    ['Salat mit gerösteten Nüssen', 'Die Nüsse auf einem Backblech im Ofen rösten. Feldsalat, Birne, Ziegenkäse, Pfeffer, Salz, Zwiebel, Knoblauch, Essig und Öl. Als Salat servieren.', ['beilagen/salate'], ['kuchen', 'hauptgerichte']],
     // Lasagne: nicht automatisch Fleisch
     ['Gemüselasagne', 'Lasagneplatten, 2 Zucchini, 1 Aubergine, Paprika, Tomaten, Béchamelsoße aus Butter, Mehl und Milch, Mozzarella. In die Auflaufform schichten und backen.', ['hauptgerichte/vegetarisch'], ['hauptgerichte/fleisch', 'hauptgerichte/vegan']],
     ['Spinat-Lasagne', '500 g Blattspinat, Ricotta, Lasagneplatten, Béchamel, Parmesan. Wer mag, kann auch Schinken dazugeben. In der Auflaufform backen.', ['hauptgerichte/vegetarisch'], ['hauptgerichte/fleisch']],
@@ -229,6 +246,7 @@ async function testLogic(browser) {
     [[['Das ist Omas genialer Hefezopf', 60]], 'Mehl, Hefe, Milch. Den Zopf flechten.', 'Omas genialer Hefezopf'],
     [[['So gelingt er garantiert!', 60]], 'Äpfel, Mehl. Den Apfelstrudel einrollen und backen. Der Apfelstrudel mit Vanillesauce.', 'Apfelstrudel'],
     [[['Unser Lieblingsrezept für den Sommer', 60]], 'Gurken, Dill, Joghurt. Den Gurkensalat kalt servieren. Gurkensalat passt zu Fisch.', 'Gurkensalat'],
+    [[['Pasta mit Spargel und frischen Erbsen Zutaten für 2 bis 3 Personen: 500 g grüner Spargel', 40]], 'Spargel, Erbsen, frischer Minze, Spaghetti.', 'Pasta mit Spargel und frischen Erbsen'],
     [[['ii | ~ ,.', 50, 20]], 'Rote Linsen, Zwiebel, Gemüsebrühe, Kokosmilch. Die Suppe 20 Minuten köcheln.', 'Vegane Suppe mit Linsen'],
   ];
   for (const [ls, x, want] of titles) {
@@ -334,6 +352,8 @@ async function testUpdatePath(browser) {
   }
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'), sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
   const v = (html.match(/app\.js\?v=(\d+)/) || [])[1];
+  const bad = ['app.js', 'vocab.js', 'sw.js', 'index.html', 'styles.css'].filter((f) => /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')));
+  check('Keine versteckten Steuerzeichen im Code', !bad.length, bad.join(', '));
   check('Versionsnummern in index.html und sw.js passen zusammen', v && sw.includes(`app.js?v=${v}`) && html.includes(`vocab.js?v=${v}`) && html.includes(`styles.css?v=${v}`) && sw.includes(`rezepte-v${v}`), `index v=${v}`);
   check('Keine JavaScript-Fehler (Seiten)', p.errors.length === 0, p.errors.join(' | '));
   await p.context().close();

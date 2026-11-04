@@ -297,8 +297,8 @@ const RULES = {
   },
 };
 
-const CLASSIFIER_VERSION = 8;
-const OCR_VERSION = 3; // erhöhen, wenn sich die Texterkennung verbessert → alle Scans werden im Hintergrund neu gelesen // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
+const CLASSIFIER_VERSION = 9;
+const OCR_VERSION = 4; // erhöhen, wenn sich die Texterkennung verbessert → alle Scans werden im Hintergrund neu gelesen // erhöhen, wenn sich die Erkennung ändert → alte Rezepte werden neu einsortiert
 const kwCache = new Map();
 function kwRegex(k) {
   if (!kwCache.has(k)) {
@@ -440,8 +440,12 @@ const SWEET_WORDS = ['puderzucker', 'vanille', 'schokolade', 'kakao', 'marmelade
 const SAVORY_CAKE_TITLE = /(spinat|zwiebel|lauch|porree|speck|schinken|gemuse|tomaten|zucchini|kartoffel|pilz|champignon|brokkoli|mangold|spargel|feta|ziegenkase|lachs|thunfisch|hackfleisch|pizza|flamm|sauerkraut|kraut|wirsing|kase-?lauch|lauch-?kase|mais|paprika|oliven|fenchel|bacon|salami|herzhaft\w*|deftig\w*|pikant\w*)[\s-]*(kuchen|torte|tarte|quiche|pie|wahe|waihe)/;
 // Erkennt deftige Kuchen: Spinatkuchen, Zwiebelkuchen, Quiche Lorraine, Lauch-Speck-Tarte …
 function isSavoryCake(body, ti, scores) {
-  const cakeish = (scores.kuchen || 0) > 0 || /quiche|tarte|flammkuchen|zwiebelkuchen|wahe|waihe|pie/.test(body + ' ' + ti);
-  if (!cakeish) return false;
+  // Ein Kuchen braucht das Wort Kuchen/Tarte/Quiche … und einen Teig oder eine Kuchenform
+  const all = body + ' ' + ti;
+  const savoryForm = /quiche|tarte|flammkuchen|zwiebelkuchen|wahe|waihe|\bpie\b/.test(all);
+  const cakeWord = savoryForm || /kuchen|torte\b/.test(all);
+  const dough = /teig|\bmehl\b|springform|tarteform|quicheform|kuchenform|backform/.test(body);
+  if (!cakeWord || !dough || ((scores.kuchen || 0) <= 0 && !savoryForm)) return false;
   const count = (list, t) => list.filter((w) => t.includes(w)).length;
   const savory = count(SAVORY_WORDS, body);
   let sweet = count(SWEET_WORDS, body);
@@ -492,14 +496,17 @@ function titleCands(lines) {
   const medH = median(lines.map((l) => l.h || 0)) || 1;
   const medInk = median(lines.map((l) => l.ink || 0));
   return lines.slice(0, 25)
-    .map((l, i) => ({ ...l, i, text: cleanTitle(l.text) }))
+    .map((l, i) => ({ ...l, i, text: cleanTitle(cutMeta(l.text)) }))
     .filter((l) => (l.text.match(/[a-zäöüß]/gi) || []).length >= 4 && !NOT_TITLE.test(l.text) && !/^\d/.test(l.text) && l.text.length <= 80)
     .map((c) => {
       const size = Math.min(4, (c.h || 0) / medH);                          // wie viel größer als normaler Text
       const bold = c.ink && medInk ? Math.min(2.5, c.ink / medInk) : 1;      // wie fett gedruckt
       const top = c.y != null ? 1 - Math.min(1, c.y / 0.6) : 1 - c.i / 15;  // je weiter oben, desto besser
       const words = c.text.split(/\s+/).length;
-      c.score = size * 1.6 + bold * 0.8 + top * 1.5 - (words > 8 ? 1 : 0) - ((c.conf != null && c.conf < 40) ? 0.8 : 0)
+      // Fließtext erkennt man an kleinem Anfangsbuchstaben oder einem Satzende mitten in der Zeile
+      const prose = /^\p{Ll}/u.test(c.text) || /\p{Ll}[.!?;]\s+\p{Lu}/u.test(c.text);
+      c.score = size * 1.6 + bold * 0.8 + top * 1.5 - (words > 8 ? 1 : 0) - ((c.conf != null && c.conf < 40) ? 0.8 : 0) - (prose ? 2.5 : 0)
+        - (isMetaLine(c.text) ? 3 : 0)
         + (hasDish(c.text) ? 1.2 : 0) - (isSentence(c.text) ? (hasDish(c.text) ? 1 : 3) : 0)
         - (MASTHEAD.test(norm(c.text).replace(/[^a-z0-9&.\s]/g, '').replace(/\s+/g, ' ').trim()) ? 6 : 0);
       return c;
@@ -524,7 +531,7 @@ function pickTitleInfo(lines) {
   else {
     // Überschrift über zwei Zeilen (gleich groß, direkt darunter)?
     const next = cands.find((c) => c.i === best.i + 1);
-    if (next && best.h && next.h >= best.h * 0.85 && next.h <= best.h * 1.2 && (best.text + next.text).length <= 60) {
+    if (next && best.h && next.h >= best.h * 0.85 && next.h <= best.h * 1.2 && (best.text + next.text).length <= 60 && !isMetaLine(next.text)) {
       best.text += ' ' + next.text;
       if (next.conf != null && best.conf != null) best.conf = Math.min(best.conf, next.conf);
     }
@@ -534,6 +541,13 @@ function pickTitleInfo(lines) {
 }
 // Überschrift über mehrere Zeilen in derselben Spalte zusammensetzen, z. B.
 // „Salat mit / Erdnuss- / Chili-Soße / (Gado Gado)“ – Wortreste links daneben (Foto, Tisch) werden ignoriert
+// Zutaten-, Mengen- oder Infozeile („Zutaten für 2 bis 3 Personen: 500 g …“) – hier endet jeder Titel
+function isMetaLine(text) {
+  const t = cleanTitle(text), n = norm(t);
+  return NOT_TITLE.test(t) || /^(zutaten|fur|personen|portionen|zubereitung|von|foto|text|rezept|tipp|dazu|menge)\b/.test(n)
+    || /\b\d+([.,]\d+)?\s*(g|kg|ml|l|el|tl|msp|stuck|personen|portionen|min|minuten|std|grad)\b/.test(n)
+    || /\b\d+\s*(bis|-|–)\s*\d+\s*(personen|portionen|stuck)/.test(n) || /:\s*\S/.test(t);
+}
 function stackTitleLines(lines, best) {
   const real = (w) => isWordy(String(w.text).replace(/[()–,.:!&]/g, '').replace(/^-+|-+$/g, '') || '§') || /^[(&]|[)]$/.test(w.text) && /\p{L}{2}/u.test(w.text);
   const words0 = best.words.filter((w) => w.bbox && real(w));
@@ -551,6 +565,10 @@ function stackTitleLines(lines, best) {
     if (parts.length >= 5) break;
     const ws = l.words.filter(inCol);
     if (!ws.length) continue; // nur Wortreste – überspringen
+    if (isMetaLine(ws.map((w) => w.text).join(' '))) break; // Zutaten/Mengen: Titel ist zu Ende
+    const width = Math.max(...ws.map((w) => w.bbox.x1)) - Math.min(...ws.map((w) => w.bbox.x0));
+    const bestWidth = Math.max(...words0.map((w) => w.bbox.x1)) - colX;
+    if (width > Math.max(bestWidth * 1.8, H * 12)) break; // viel breiter als der Titel: das ist Fließtext
     const y0 = Math.min(...ws.map((w) => w.bbox.y0));
     if (y0 - lastY1 > H * 1.1) break; // zu weit weg
     const h = wh(ws);
@@ -558,6 +576,25 @@ function stackTitleLines(lines, best) {
     parts.push(ws.map((w) => w.text).join(' '));
     confs.push(...ws.map((w) => w.conf).filter((x) => x != null));
     lastY1 = Math.max(...ws.map((w) => w.bbox.y1));
+  }
+  // … und nach oben: Zeilen direkt darüber in derselben Spalte gehören ebenfalls dazu
+  let firstY0 = Math.min(...words0.map((w) => w.bbox.y0));
+  const above = lines.filter((l) => l !== best && l.bbox && l.words && l.bbox.y1 <= best.bbox.y1 && l.bbox.y0 < best.bbox.y0).sort((a, b) => b.bbox.y0 - a.bbox.y0);
+  for (const l of above) {
+    if (parts.length >= 5) break;
+    const ws = l.words.filter(inCol);
+    if (!ws.length) continue;
+    const txt = ws.map((w) => w.text).join(' ');
+    if (isMetaLine(txt) || MASTHEAD.test(norm(txt).replace(/[^a-z0-9&.\s]/g, '').replace(/\s+/g, ' ').trim())) break;
+    const y1 = Math.max(...ws.map((w) => w.bbox.y1));
+    if (firstY0 - y1 > H * 1.1) break;
+    const h = wh(ws);
+    if (h < H * 0.75 || h > H * 1.4) break;
+    const width = Math.max(...ws.map((w) => w.bbox.x1)) - Math.min(...ws.map((w) => w.bbox.x0));
+    if (width > Math.max((Math.max(...words0.map((w) => w.bbox.x1)) - colX) * 1.8, H * 12)) break;
+    parts.unshift(txt);
+    confs.push(...ws.map((w) => w.conf).filter((x) => x != null));
+    firstY0 = Math.min(...ws.map((w) => w.bbox.y0));
   }
   if (parts.length < 2) return null;
   return { text: parts.join(' ').replace(/\s+/g, ' ').trim(), conf: confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null };
@@ -576,7 +613,9 @@ function isWordyPart(tok) {
 }
 // Entfernt Lesereste („DE Erdnussbutter - Brownies“ → „Erdnussbutter-Brownies“) und korrigiert
 // Titelwörter, die im Rezepttext richtig geschrieben vorkommen
+const cutMeta = (t) => String(t || '').replace(/\s+(zutaten|zubereitung|für\s+\d|fur\s+\d|\d+\s*(bis|-|–)\s*\d+\s*personen)\b.*$/i, '');
 function tidyTitle(raw, text = '') {
+  raw = cutMeta(raw);
   let t = cleanTitle(raw).replace(/[|_~•*"„“”«»<>{}\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
   t = t.replace(/(\p{L})\s*[-–]\s+(?=\p{L})|(\p{L})\s+[-–]\s*(?=\p{L})/gu, (m, a, b) => (a || b) + '-');
   let toks = t.split(' ').filter(Boolean);
@@ -590,7 +629,7 @@ function tidyTitle(raw, text = '') {
     const parts = tok.split('-');
     return parts.map((part) => {
       const n = norm(part);
-      if (n.length < 5) return part;
+      if (n.length < 5 || isKnownWord(n)) return part; // bekanntes Wort („frischen“) – nicht verändern
       const max = n.length >= 9 ? 2 : 1;
       // Die Überschrift steht selbst im Text – zählt also einmal mit
       const same = bodyWords.filter((w) => norm(w) === n).length;
@@ -719,13 +758,16 @@ function getOcr() {
   if (!ocrWorkerP) {
     ocrWorkerP = (async () => {
       await loadScript('vendor/tesseract/tesseract.min.js');
-      return Tesseract.createWorker('deu', 1, {
+      const w = await Tesseract.createWorker('deu', 1, {
         workerPath: BASE + 'vendor/tesseract/worker.min.js',
         corePath: BASE + 'vendor/tesseract/',
         langPath: BASE + 'vendor/lang',
         workerBlobURL: false,
         logger: (m) => ocrProgress(m),
       });
+      // Immer gleicher Lesemodus: automatische Spaltenerkennung (mehrspaltige Zeitungsseiten)
+      await w.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '0' });
+      return w;
     })();
     ocrWorkerP.catch(() => { ocrWorkerP = null; });
   }
@@ -893,6 +935,8 @@ function measureLines(src, lines) {
       const b = l.bbox;
       if (!b) continue;
       l.y = b.y0 / H;
+      const wh = (l.words || []).filter((w) => w.bbox && /\p{L}{2}/u.test(w.text)).map((w) => w.bbox.y1 - w.bbox.y0).sort((x, y) => x - y);
+      if (wh.length) l.h = wh[Math.floor(wh.length / 2)];
       // Strichdicke: dunkle Pixel im Verhältnis zur Zeilenhöhe – große Schrift zählt dadurch nicht doppelt
       let dark = 0, n = 0;
       const step = Math.max(1, Math.round((b.y1 - b.y0) / 25));
