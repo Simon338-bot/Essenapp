@@ -2,7 +2,7 @@
 /* Bühnenton – Töne fürs Theater.
    Alles läuft auf dem Gerät: Tondateien liegen in IndexedDB, die App selbst im Service-Worker-Cache. */
 
-const APP_VERSION = 2;
+const APP_VERSION = 3;
 
 /* ===================== Helfer ===================== */
 const $ = (s, el = document) => el.querySelector(s);
@@ -648,6 +648,7 @@ function tileEl(t) {
   }
   if (t.hold && !editMode) el.style.touchAction = 'none';
   el.addEventListener('pointerdown', (e) => onTileDown(e, t, el));
+  if (editMode && hasTouch) el.addEventListener('touchstart', (e) => editTouchStart(e, t, el), { passive: true });
   el.addEventListener('contextmenu', (e) => e.preventDefault());
   tileRefs.set(t.id, { el, prog, elp, rem, cv, tile: t, idleRem, st: 'idle', on: false });
   return el;
@@ -669,7 +670,7 @@ function drawTileWaves() {
 function onTileDown(e, t, el) {
   if (e.button > 0) return;
   if (editMode) {
-    if (e.target.closest('.grip')) { e.preventDefault(); startDrag(e.pointerId, e.clientX, e.clientY, t, el); return; }
+    if (hasTouch && e.pointerType !== 'mouse') return; // Touch läuft über editTouchStart
     editPress(e, t, el);
     return;
   }
@@ -708,40 +709,78 @@ function tapDetect(e, fn) {
 }
 
 /* Kästen verschieben (Bearbeiten-Modus):
-   kurz antippen = bearbeiten, gedrückt halten (oder am Griff ziehen) = verschieben */
+   kurz antippen = bearbeiten, kurz gedrückt halten und ziehen = verschieben.
+   Auf iPad/iPhone mit Touch-Ereignissen (zuverlässiger als Pointer-Ereignisse), mit Maus über Pointer-Ereignisse. */
 let dragging = false;
-function editPress(e, t, el) {
-  const id = e.pointerId, x0 = e.clientX, y0 = e.clientY;
-  let x = x0, y = y0, state0 = 'wait';
-  el.classList.add('pressing');
-  const cleanup = () => {
+const HOLD_MS = 450;
+const hasTouch = 'ontouchstart' in window;
+
+function editTouchStart(e, t, el) {
+  if (!editMode || e.touches.length > 1 || dragging) return;
+  const c0 = e.changedTouches[0], tid = c0.identifier;
+  const x0 = c0.clientX, y0 = c0.clientY;
+  let x = x0, y = y0, mode = 'wait', drag = null;
+  const own = (ev) => [...ev.changedTouches].find((c) => c.identifier === tid);
+  const off = () => {
     clearTimeout(timer);
     el.classList.remove('pressing');
+    document.removeEventListener('touchmove', mv, { passive: false });
+    document.removeEventListener('touchend', up);
+    document.removeEventListener('touchcancel', up);
+  };
+  const begin = () => {
+    if (mode !== 'wait') return;
+    mode = 'drag';
+    el.classList.remove('pressing');
+    drag = beginDrag(x, y, t, el);
+  };
+  const mv = (ev) => {
+    const c = own(ev);
+    if (!c) return;
+    x = c.clientX; y = c.clientY;
+    if (mode === 'drag') { ev.preventDefault(); drag.move(x, y); }
+    else if (mode === 'wait' && Math.hypot(x - x0, y - y0) > 10) { mode = 'scroll'; off(); }
+  };
+  const up = (ev) => {
+    if (!own(ev)) return;
+    const m = mode;
+    mode = 'done';
+    off();
+    if (m === 'drag') { ev.preventDefault(); drag.drop(ev.type === 'touchend'); }
+    else if (m === 'wait' && ev.type === 'touchend') { ev.preventDefault(); openTileDialog(activeFolder(), t); }
+  };
+  document.addEventListener('touchmove', mv, { passive: false });
+  document.addEventListener('touchend', up);
+  document.addEventListener('touchcancel', up);
+  el.classList.add('pressing');
+  const timer = setTimeout(begin, e.target.closest('.grip') ? 0 : HOLD_MS);
+}
+
+function editPress(e, t, el) { // Maus
+  const id = e.pointerId, x0 = e.clientX, y0 = e.clientY;
+  let mode = 'wait', drag = null;
+  const off = () => {
     window.removeEventListener('pointermove', mv);
     window.removeEventListener('pointerup', up);
     window.removeEventListener('pointercancel', up);
   };
-  const go = () => { if (state0 !== 'wait') return; state0 = 'drag'; cleanup(); startDrag(id, x, y, t, el); };
-  const timer = setTimeout(go, 320);
   const mv = (ev) => {
     if (ev.pointerId !== id) return;
-    x = ev.clientX; y = ev.clientY;
-    if (Math.hypot(x - x0, y - y0) > 10) {
-      if (ev.pointerType === 'mouse') go();           // mit Maus: einfach ziehen
-      else { state0 = 'scroll'; cleanup(); }        // Finger bewegt sich vorher = scrollen
-    }
+    if (mode === 'wait' && Math.hypot(ev.clientX - x0, ev.clientY - y0) > 6) { mode = 'drag'; drag = beginDrag(x0, y0, t, el); }
+    if (mode === 'drag') { ev.preventDefault(); drag.move(ev.clientX, ev.clientY); }
   };
   const up = (ev) => {
     if (ev.pointerId !== id) return;
-    const wasWait = state0 === 'wait';
-    state0 = 'done'; cleanup();
-    if (wasWait && ev.type === 'pointerup') openTileDialog(activeFolder(), t);
+    off();
+    if (mode === 'drag') drag.drop(ev.type === 'pointerup');
+    else if (ev.type === 'pointerup') openTileDialog(activeFolder(), t);
   };
-  window.addEventListener('pointermove', mv);
+  window.addEventListener('pointermove', mv, { passive: false });
   window.addEventListener('pointerup', up);
   window.addEventListener('pointercancel', up);
 }
-function startDrag(id, px, py, t, el) {
+
+function beginDrag(px, py, t, el) {
   const main = $('#main'), grid = el.parentNode;
   const r0 = el.getBoundingClientRect();
   const ox = px - r0.left, oy = py - r0.top;
@@ -751,7 +790,7 @@ function startDrag(id, px, py, t, el) {
   const ph = h('div', { class: 'tile placeholder' });
   grid.insertBefore(ph, el);
   el.classList.add('dragging');
-  Object.assign(el.style, { position: 'fixed', left: r0.left + 'px', top: r0.top + 'px', width: r0.width + 'px', height: r0.height + 'px', margin: 0 });
+  Object.assign(el.style, { position: 'fixed', left: r0.left + 'px', top: r0.top + 'px', width: r0.width + 'px', height: r0.height + 'px', margin: '0' });
   const place = () => { el.style.transform = `translate(${x - ox - r0.left}px, ${y - oy - r0.top}px) scale(1.06)`; };
   const inside = (r) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   const findTarget = () => {
@@ -771,7 +810,6 @@ function startDrag(id, px, py, t, el) {
       else if (tl.nextSibling !== ph) grid.insertBefore(ph, tl.nextSibling);
       return;
     }
-    // hinter den letzten Kasten (z. B. über dem „Kasten hinzufügen“-Feld)
     const add = grid.querySelector('.add-tile');
     if (add && inside(add.getBoundingClientRect()) && add.previousSibling !== ph) grid.insertBefore(ph, add);
   };
@@ -782,41 +820,30 @@ function startDrag(id, px, py, t, el) {
     if (y < mr.top + 70 && y > mr.top - 10) d = -12; else if (y > mr.bottom - 70) d = 12;
     if (d) { const s0 = main.scrollTop; main.scrollTop += d; if (main.scrollTop !== s0) findTarget(); }
   }, 16);
-  const mv = (ev) => {
-    if (ev.pointerId !== id) return;
-    ev.preventDefault();
-    x = ev.clientX; y = ev.clientY;
-    place(); findTarget();
-  };
-  const up = (ev) => {
-    if (ev.pointerId !== id) return;
-    clearInterval(scroller);
-    dragging = false;
-    window.removeEventListener('pointermove', mv);
-    window.removeEventListener('pointerup', up);
-    window.removeEventListener('pointercancel', up);
-    const f = activeFolder();
-    if (ev.type === 'pointerup' && tabTarget) {
-      const to = folderById(tabTarget);
-      moveTile(t, f, to);
-      toast('Nach „' + to.name + '“ verschoben');
-    } else {
-      // neue Reihenfolge = Reihenfolge im Raster (Platzhalter an Stelle des Kastens)
-      const order = [];
-      for (const n of grid.children) {
-        if (n === ph) order.push(t.id);
-        else if (n !== el && n.dataset && n.dataset.id) order.push(n.dataset.id);
+  return {
+    move(nx, ny) { x = nx; y = ny; place(); findTarget(); },
+    drop(ok) {
+      clearInterval(scroller);
+      dragging = false;
+      const f = activeFolder();
+      if (ok && tabTarget) {
+        const to = folderById(tabTarget);
+        moveTile(t, f, to);
+        toast('Nach „' + to.name + '“ verschoben');
+      } else if (ok) {
+        const order = [];
+        for (const n of grid.children) {
+          if (n === ph) order.push(t.id);
+          else if (n !== el && n.dataset && n.dataset.id) order.push(n.dataset.id);
+        }
+        const byId = new Map(f.tiles.map((x2) => [x2.id, x2]));
+        const next = order.map((i) => byId.get(i)).filter(Boolean);
+        if (next.length === f.tiles.length) f.tiles = next;
       }
-      const byId = new Map(f.tiles.map((x2) => [x2.id, x2]));
-      const next = order.map((i) => byId.get(i)).filter(Boolean);
-      if (next.length === f.tiles.length) f.tiles = next;
-    }
-    save();
-    render();
+      save();
+      render();
+    },
   };
-  window.addEventListener('pointermove', mv, { passive: false });
-  window.addEventListener('pointerup', up);
-  window.addEventListener('pointercancel', up);
 }
 function moveTile(t, from, to) {
   if (!to || from === to) return;

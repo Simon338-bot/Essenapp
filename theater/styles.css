@@ -90,7 +90,7 @@ body.editing .tile:not(.add-tile) { outline: 2px dashed rgba(255,255,255,.45); o
   touch-action: none; z-index: 3; color: var(--ink); font-size: 22px; }
 .tile .pen { position: absolute; right: 8px; bottom: 30px; z-index: 2; font-size: 18px; opacity: .8; }
 .tile.dragging { z-index: 50; opacity: .93; box-shadow: 0 16px 34px rgba(0,0,0,.65); transition: none; outline-color: var(--accent) !important; }
-.tile.pressing { transform: scale(.97); transition: transform .3s; }
+.tile.pressing { transform: scale(.94); filter: brightness(1.12); transition: transform .45s, filter .45s; }
 .tile.placeholder { background: rgba(255,159,10,.12); border: 2px dashed var(--accent); box-shadow: none; outline: none !important; }
 .edithint { color: var(--muted); font-size: 14px; text-align: center; margin: 0 0 8px; }
 .add-tile { background: transparent; border: 2px dashed #6a6a70; color: #b0b0b5; align-items: center; justify-content: center; gap: 6px; box-shadow: none; }
