@@ -2,7 +2,7 @@
 /* Bühnenton – Töne fürs Theater.
    Alles läuft auf dem Gerät: Tondateien liegen in IndexedDB, die App selbst im Service-Worker-Cache. */
 
-const APP_VERSION = 1;
+const APP_VERSION = 2;
 
 /* ===================== Helfer ===================== */
 const $ = (s, el = document) => el.querySelector(s);
@@ -161,34 +161,57 @@ async function load() {
 }
 
 /* ===================== Audio-Grundlagen ===================== */
-let ctx = null, master = null, unlocked = false;
+/* iPad/iPhone: Nach einem App-Wechsel (Fotos, Dateien, andere App, Sperrbildschirm) bleibt der
+   Audio-Kontext oft „hängen“ und lässt sich nicht mehr fortsetzen. Dann wird er bei der nächsten
+   Berührung einfach neu erzeugt. */
+let ctx = null, master = null, ctxStuck = false, wasHidden = false, checkTimer = 0;
+function makeCtx() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* ältere Geräte */ }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  ctx = new AC({ latencyHint: 'interactive' });
+  master = ctx.createGain();
+  master.connect(ctx.destination);
+  ctxStuck = false;
+}
 function getCtx() {
-  if (!ctx) {
-    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* ältere Geräte */ }
-    const AC = window.AudioContext || window.webkitAudioContext;
-    ctx = new AC({ latencyHint: 'interactive' });
-    master = ctx.createGain();
-    master.connect(ctx.destination);
-  }
+  if (!ctx || ctx.state === 'closed') makeCtx();
   return ctx;
 }
-function ensureCtx() { // nur aus einer Berührung heraus aufrufen
+function resetCtx() {
+  for (const v of [...voices.values()]) { v.state = 'done'; v.src = null; }
+  voices.clear();
+  const old = ctx;
+  ctx = null;
+  try { if (old) old.close(); } catch (e) { /* egal */ }
+  makeCtx();
+  changed();
+}
+function ensureCtx() { // aus einer Berührung heraus aufrufen
   getCtx();
-  if (ctx.state !== 'running') ctx.resume().catch(() => {});
-  if (!unlocked) { // iOS: einmal einen stillen Ton abspielen, damit Audio freigeschaltet ist
-    unlocked = true;
+  if (ctx.state !== 'running' && (ctxStuck || ctx.state === 'interrupted' || wasHidden)) resetCtx();
+  wasHidden = false;
+  if (ctx.state !== 'running') {
+    ctx.resume().catch(() => {});
+    // stiller Ton: schaltet Audio auf iOS frei
     try {
       const b = ctx.createBuffer(1, 1, 22050), s = ctx.createBufferSource();
       s.buffer = b; s.connect(ctx.destination); s.start(0);
     } catch (e) { /* egal */ }
+    const c = ctx;
+    clearTimeout(checkTimer);
+    checkTimer = setTimeout(() => {
+      if (c === ctx && c.state !== 'running') { ctxStuck = true; toast('Ton wird neu gestartet – bitte nochmal antippen.'); }
+    }, 700);
   }
   return ctx;
 }
 function decode(ab) {
   const c = getCtx();
   return new Promise((res, rej) => {
-    const p = c.decodeAudioData(ab, res, (e) => rej(e || new Error('decode')));
-    if (p && p.then) p.then(res, rej);
+    const tm = setTimeout(() => rej(new Error('Zeitüberschreitung beim Lesen')), 30000);
+    const ok = (b) => { clearTimeout(tm); res(b); }, bad = (e) => { clearTimeout(tm); rej(e || new Error('decode')); };
+    const p = c.decodeAudioData(ab, ok, bad);
+    if (p && p.then) p.then(ok, bad);
   });
 }
 
@@ -584,6 +607,7 @@ function renderGrid() {
     grid.appendChild(h('button', { class: 'tile add-tile', onclick: () => openTileDialog(f, null) },
       h('span', { class: 'plus' }, '+'), h('span', null, 'Kasten hinzufügen')));
   }
+  if (editMode && f.tiles.length) main.appendChild(h('p', { class: 'edithint' }, 'Kasten antippen = bearbeiten · Kasten gedrückt halten und ziehen = verschieben (auch auf einen anderen Ordner-Reiter)'));
   main.appendChild(grid);
   if (!f.tiles.length && !editMode) {
     main.appendChild(h('div', { class: 'empty' }, 'In diesem Ordner sind noch keine Kästen.', h('br'),
@@ -645,8 +669,8 @@ function drawTileWaves() {
 function onTileDown(e, t, el) {
   if (e.button > 0) return;
   if (editMode) {
-    if (e.target.closest('.grip')) { startDrag(e, t, el); return; }
-    tapDetect(e, () => openTileDialog(activeFolder(), t));
+    if (e.target.closest('.grip')) { e.preventDefault(); startDrag(e.pointerId, e.clientX, e.clientY, t, el); return; }
+    editPress(e, t, el);
     return;
   }
   ensureCtx();
@@ -683,43 +707,80 @@ function tapDetect(e, fn) {
   window.addEventListener('pointercancel', done);
 }
 
-/* Kästen verschieben (Bearbeiten-Modus, am Griff ziehen) */
-function startDrag(e, t, el) {
-  e.preventDefault();
-  const id = e.pointerId, main = $('#main');
-  const r0 = el.getBoundingClientRect();
-  const ox = e.clientX - r0.left, oy = e.clientY - r0.top;
-  let x = e.clientX, y = e.clientY, target = null, before = false, tabTarget = null;
-  el.classList.add('dragging');
-  const place = () => {
-    el.style.transform = '';
-    const b = el.getBoundingClientRect();
-    el.style.transform = `translate(${x - ox - b.left}px, ${y - oy - b.top}px) scale(1.04)`;
+/* Kästen verschieben (Bearbeiten-Modus):
+   kurz antippen = bearbeiten, gedrückt halten (oder am Griff ziehen) = verschieben */
+let dragging = false;
+function editPress(e, t, el) {
+  const id = e.pointerId, x0 = e.clientX, y0 = e.clientY;
+  let x = x0, y = y0, state0 = 'wait';
+  el.classList.add('pressing');
+  const cleanup = () => {
+    clearTimeout(timer);
+    el.classList.remove('pressing');
+    window.removeEventListener('pointermove', mv);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
   };
-  const clearMarks = () => document.querySelectorAll('.drop-before,.drop-after,.drop-tab')
-    .forEach((n) => n.classList.remove('drop-before', 'drop-after', 'drop-tab'));
+  const go = () => { if (state0 !== 'wait') return; state0 = 'drag'; cleanup(); startDrag(id, x, y, t, el); };
+  const timer = setTimeout(go, 320);
+  const mv = (ev) => {
+    if (ev.pointerId !== id) return;
+    x = ev.clientX; y = ev.clientY;
+    if (Math.hypot(x - x0, y - y0) > 10) {
+      if (ev.pointerType === 'mouse') go();           // mit Maus: einfach ziehen
+      else { state0 = 'scroll'; cleanup(); }        // Finger bewegt sich vorher = scrollen
+    }
+  };
+  const up = (ev) => {
+    if (ev.pointerId !== id) return;
+    const wasWait = state0 === 'wait';
+    state0 = 'done'; cleanup();
+    if (wasWait && ev.type === 'pointerup') openTileDialog(activeFolder(), t);
+  };
+  window.addEventListener('pointermove', mv);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
+}
+function startDrag(id, px, py, t, el) {
+  const main = $('#main'), grid = el.parentNode;
+  const r0 = el.getBoundingClientRect();
+  const ox = px - r0.left, oy = py - r0.top;
+  let x = px, y = py, tabTarget = null;
+  dragging = true;
+  // Platzhalter nimmt den Platz im Raster ein, der Kasten selbst schwebt unter dem Finger
+  const ph = h('div', { class: 'tile placeholder' });
+  grid.insertBefore(ph, el);
+  el.classList.add('dragging');
+  Object.assign(el.style, { position: 'fixed', left: r0.left + 'px', top: r0.top + 'px', width: r0.width + 'px', height: r0.height + 'px', margin: 0 });
+  const place = () => { el.style.transform = `translate(${x - ox - r0.left}px, ${y - oy - r0.top}px) scale(1.06)`; };
+  const inside = (r) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   const findTarget = () => {
-    clearMarks(); target = null; tabTarget = null;
-    const under = document.elementFromPoint(x, y);
-    const tab = under && under.closest('.tab[data-folder]');
-    if (tab) {
-      if (tab.dataset.folder !== state.activeFolder) { tabTarget = tab.dataset.folder; tab.classList.add('drop-tab'); }
+    document.querySelectorAll('.drop-tab').forEach((n) => n.classList.remove('drop-tab'));
+    tabTarget = null;
+    for (const tab of document.querySelectorAll('.tab[data-folder]')) {
+      if (inside(tab.getBoundingClientRect())) {
+        if (tab.dataset.folder !== state.activeFolder) { tabTarget = tab.dataset.folder; tab.classList.add('drop-tab'); }
+        return;
+      }
+    }
+    for (const tl of grid.querySelectorAll('.tile[data-id]')) {
+      if (tl === el) continue;
+      const tr = tl.getBoundingClientRect();
+      if (!inside(tr)) continue;
+      if (x < tr.left + tr.width / 2) { if (tl.previousSibling !== ph) grid.insertBefore(ph, tl); }
+      else if (tl.nextSibling !== ph) grid.insertBefore(ph, tl.nextSibling);
       return;
     }
-    const tl = under && under.closest('.tile[data-id]');
-    if (tl && tl !== el) {
-      const tr = tl.getBoundingClientRect();
-      before = x < tr.left + tr.width / 2;
-      target = tl.dataset.id;
-      tl.classList.add(before ? 'drop-before' : 'drop-after');
-    }
+    // hinter den letzten Kasten (z. B. über dem „Kasten hinzufügen“-Feld)
+    const add = grid.querySelector('.add-tile');
+    if (add && inside(add.getBoundingClientRect()) && add.previousSibling !== ph) grid.insertBefore(ph, add);
   };
   place();
   const scroller = setInterval(() => {
     const mr = main.getBoundingClientRect();
     let d = 0;
-    if (y < mr.top + 70) d = -14; else if (y > mr.bottom - 70) d = 14;
-    if (d) { const before0 = main.scrollTop; main.scrollTop += d; if (main.scrollTop !== before0) { place(); findTarget(); } }
+    if (y < mr.top + 70 && y > mr.top - 10) d = -12; else if (y > mr.bottom - 70) d = 12;
+    if (d) { const s0 = main.scrollTop; main.scrollTop += d; if (main.scrollTop !== s0) findTarget(); }
   }, 16);
   const mv = (ev) => {
     if (ev.pointerId !== id) return;
@@ -730,22 +791,25 @@ function startDrag(e, t, el) {
   const up = (ev) => {
     if (ev.pointerId !== id) return;
     clearInterval(scroller);
+    dragging = false;
     window.removeEventListener('pointermove', mv);
     window.removeEventListener('pointerup', up);
     window.removeEventListener('pointercancel', up);
-    clearMarks();
-    el.classList.remove('dragging');
-    el.style.transform = '';
     const f = activeFolder();
     if (ev.type === 'pointerup' && tabTarget) {
       const to = folderById(tabTarget);
       moveTile(t, f, to);
       toast('Nach „' + to.name + '“ verschoben');
-    } else if (ev.type === 'pointerup' && target) {
-      f.tiles.splice(f.tiles.indexOf(t), 1);
-      let to = f.tiles.findIndex((x2) => x2.id === target);
-      if (to < 0) to = f.tiles.length; else if (!before) to++;
-      f.tiles.splice(to, 0, t);
+    } else {
+      // neue Reihenfolge = Reihenfolge im Raster (Platzhalter an Stelle des Kastens)
+      const order = [];
+      for (const n of grid.children) {
+        if (n === ph) order.push(t.id);
+        else if (n !== el && n.dataset && n.dataset.id) order.push(n.dataset.id);
+      }
+      const byId = new Map(f.tiles.map((x2) => [x2.id, x2]));
+      const next = order.map((i) => byId.get(i)).filter(Boolean);
+      if (next.length === f.tiles.length) f.tiles = next;
     }
     save();
     render();
@@ -1278,7 +1342,7 @@ function openSettings() {
       h('ul', null,
         h('li', null, h('b', null, 'SPIELEN: '), 'Kasten antippen = Ton startet. Nochmal antippen = Ton stoppt (mit der eingestellten Ausblendzeit). Während er ausblendet nochmal tippen = sofort aus.'),
         h('li', null, 'Mehrere Töne können gleichzeitig laufen. ', h('b', null, 'Pause'), ' hält alle an (nochmal = weiter), ', h('b', null, 'Alle stoppen'), ' macht sofort alles aus, ', h('b', null, 'Ausblenden'), ' blendet alle zusammen sanft aus.'),
-        h('li', null, h('b', null, 'BEARBEITEN: '), 'Kasten antippen = Name, Farbe, Lautstärke, Ein-/Ausblenden und Schnitt. Am Griff oben links ziehen = Kasten verschieben, auch auf einen anderen Ordner-Reiter.'),
+        h('li', null, h('b', null, 'BEARBEITEN: '), 'Kasten antippen = Name, Farbe, Lautstärke, Ein-/Ausblenden und Schnitt. Kasten gedrückt halten und ziehen = verschieben, auch auf einen anderen Ordner-Reiter.'),
         h('li', null, 'Den aktiven Ordner-Reiter im Bearbeiten-Modus antippen = Ordner umbenennen, Kastengröße ändern, löschen.'),
         h('li', null, 'Für die Vorstellung: iPad auf „Nicht stören“ stellen und die App nicht verlassen – im Hintergrund hält iPadOS die Töne an.'))),
     h('p', { class: 'hint', style: 'text-align:center;margin-top:18px' }, 'Bühnenton · Version ' + APP_VERSION + ' · alle Daten bleiben auf diesem Gerät'));
@@ -1437,16 +1501,26 @@ async function main() {
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
-  // Audio auf iOS bei der ersten Berührung freischalten
+  // Audio auf iOS freischalten: zählt nur beim Loslassen des Fingers (touchend/click), nicht beim Aufsetzen
   const unlock = () => { ensureCtx(); updateWakeLock(); };
-  document.addEventListener('pointerdown', unlock, true);
   document.addEventListener('touchend', unlock, true);
+  document.addEventListener('click', unlock, true);
   document.addEventListener('touchstart', () => {}, { passive: true }); // :active auf iOS
+  // Beim Verschieben von Kästen das Scrollen verhindern
+  document.addEventListener('touchmove', (e) => { if (dragging) e.preventDefault(); }, { passive: false });
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') flushSave();
+    if (document.visibilityState === 'hidden') { flushSave(); wasHidden = true; }
     updateWakeLock();
   });
+  if ('serviceWorker' in navigator) {
+    let hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) { hadController = true; return; }
+      if (!liveVoices().length && !document.querySelector('.ov')) location.reload();
+      else toast('Neue Version geladen – wird beim nächsten Öffnen aktiv.');
+    });
+  }
   window.addEventListener('pagehide', flushSave);
   let rt = 0;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(drawTileWaves, 120); });

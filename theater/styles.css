@@ -89,9 +89,10 @@ body.editing .tile:not(.add-tile) { outline: 2px dashed rgba(255,255,255,.45); o
 .tile .grip { position: absolute; left: 0; top: 0; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center;
   touch-action: none; z-index: 3; color: var(--ink); font-size: 22px; }
 .tile .pen { position: absolute; right: 8px; bottom: 30px; z-index: 2; font-size: 18px; opacity: .8; }
-.tile.dragging { pointer-events: none; z-index: 50; opacity: .92; box-shadow: 0 14px 30px rgba(0,0,0,.6); transition: none; }
-.tile.drop-before { box-shadow: -6px 0 0 0 var(--accent); }
-.tile.drop-after { box-shadow: 6px 0 0 0 var(--accent); }
+.tile.dragging { z-index: 50; opacity: .93; box-shadow: 0 16px 34px rgba(0,0,0,.65); transition: none; outline-color: var(--accent) !important; }
+.tile.pressing { transform: scale(.97); transition: transform .3s; }
+.tile.placeholder { background: rgba(255,159,10,.12); border: 2px dashed var(--accent); box-shadow: none; outline: none !important; }
+.edithint { color: var(--muted); font-size: 14px; text-align: center; margin: 0 0 8px; }
 .add-tile { background: transparent; border: 2px dashed #6a6a70; color: #b0b0b5; align-items: center; justify-content: center; gap: 6px; box-shadow: none; }
 .add-tile .plus { font-size: 44px; line-height: 1; color: var(--accent); }
 

@@ -20,7 +20,7 @@ Töne und Musik fürs Theater: Kästen antippen, abspielen, gemeinsam ausblenden
 - **+ Kasten** oder **Mehrere Töne** (legt für jede Datei einen Kasten an).
 - Kasten antippen: Name, Ton aus Dateien oder Fotos/Videos, Farbe, Lautstärke, Einblenden und Ausblenden (je 0–10 s),
   Endlosschleife, Solo, „Nur solange gedrückt“, Start und Ende schneiden (mit Zoom und Feinschritten), reinhören.
-- Am Griff ⠿ ziehen = Kasten verschieben, auch auf einen anderen Ordner-Reiter.
+- Kasten gedrückt halten und ziehen = verschieben, auch auf einen anderen Ordner-Reiter.
 - Einstellungen: Tondateien verwalten, **Sicherung erstellen/laden** (eine Datei mit allem, z. B. für ein zweites iPad).
 
 ## Technik
