@@ -28,6 +28,7 @@ täglich benutzt. **Sicherheit vor Tempo: lieber nichts ändern als etwas kaputt
 7. Gibt es nichts zu tun: nichts committen.
 
 ## Wichtig
+- Der Ordner `theater/` ist eine eigene App (Bühnenton) und gehört **nicht** zur täglichen Prüfung – dort nichts ändern.
 - Die Rezepte der Familie liegen auf den Geräten bzw. im privaten Repository `Essenapp-Rezepte`.
   Dieses Repository **nie** anfassen.
 - Keine Schlüssel, Tokens oder persönlichen Daten in Commits, Meldungen oder Logs.

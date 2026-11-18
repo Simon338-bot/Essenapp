@@ -4,6 +4,9 @@ Eingescannte Rezepte – automatisch sortiert und schnell gefunden.
 
 **App öffnen:** https://simon338-bot.github.io/Essenapp/
 
+> Im Ordner `theater/` liegt außerdem die eigenständige Theater-App **Bühnenton** (Töne abspielen und ausblenden):
+> https://simon338-bot.github.io/Essenapp/theater/ – siehe [theater/README.md](theater/README.md).
+
 ## So funktioniert's
 
 1. Unten auf **📷 Scannen** tippen und Fotos oder PDFs vom Scanner auswählen (gerne mehrere auf einmal).
