@@ -2,7 +2,7 @@
 /* Bühnenton – Töne fürs Theater.
    Alles läuft auf dem Gerät: Tondateien liegen in IndexedDB, die App selbst im Service-Worker-Cache. */
 
-const APP_VERSION = 6;
+const APP_VERSION = 7;
 
 /* ===================== Helfer ===================== */
 const $ = (s, el = document) => el.querySelector(s);
@@ -697,8 +697,15 @@ function renderGrid() {
   if (editMode && f.tiles.length) main.appendChild(h('p', { class: 'edithint' }, 'Kasten antippen = bearbeiten · Kasten gedrückt halten und ziehen = verschieben (auch auf einen anderen Ordner-Reiter)'));
   main.appendChild(grid);
   if (!f.tiles.length && !editMode) {
-    main.appendChild(h('div', { class: 'empty' }, 'In diesem Ordner sind noch keine Kästen.', h('br'),
-      'Tippe oben rechts auf ', h('b', null, 'BEARBEITEN'), ' und dann auf ', h('b', null, '+ Kasten'), ' oder ', h('b', null, 'Mehrere Töne'), '.'));
+    const allEmpty = state.folders.every((x) => !x.tiles.length);
+    main.appendChild(h('div', { class: 'empty' },
+      allEmpty ? h('div', { class: 'welcome' },
+        h('h2', null, 'Willkommen bei Bühnenton'),
+        h('p', null, 'Hast du ein Paket (Datei „….buehnenton“) bekommen? Dann hier öffnen – danach sind alle Ordner, Kästen und Töne da.'),
+        h('button', { class: 'btn primary big', onclick: importBackup }, 'Paket öffnen'),
+        h('p', { class: 'small' }, 'Auf dem iPad: Die Datei vorher z. B. in WhatsApp antippen → Teilen → „In Dateien sichern“.')) : null,
+      allEmpty ? 'Oder selbst anfangen: ' : 'In diesem Ordner sind noch keine Kästen. ',
+      'Oben rechts auf ', h('b', null, 'BEARBEITEN'), ' und dann auf ', h('b', null, '+ Kasten'), ' oder ', h('b', null, 'Mehrere Töne'), '.'));
   }
   if (!isStandalone() && !localStorage.getItem('bt-hide-install')) {
     const b = h('div', { class: 'banner' }, h('b', null, 'Als App installieren: '),

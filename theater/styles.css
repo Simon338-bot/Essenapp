@@ -208,3 +208,8 @@ body.editing .tile:not(.add-tile) { outline: 2px dashed rgba(255,255,255,.45); o
 .tile .badge.num { background: rgba(0,0,0,.55); font-size: 12px; min-width: 20px; justify-content: center; }
 @media (hover: hover) { .tile:hover { filter: brightness(1.06); } .btn:hover, .cbtn:hover .ci { filter: brightness(1.08); } }
 body.cue #toast { bottom: calc(110px + env(safe-area-inset-bottom)); }
+.welcome { max-width: 520px; margin: 0 auto 28px; background: #3a3a3c; border-radius: 16px; padding: 22px 20px; color: var(--text); }
+.welcome h2 { margin: 0 0 8px; font-size: 22px; }
+.welcome p { margin: 0 0 14px; font-size: 16px; color: #ddd; }
+.welcome p.small { font-size: 13px; color: var(--muted); margin: 12px 0 0; }
+.btn.big { font-size: 19px; padding: 15px 30px; font-weight: 600; }
