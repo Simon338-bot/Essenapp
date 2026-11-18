@@ -2,7 +2,7 @@
 /* Bühnenton – Töne fürs Theater.
    Alles läuft auf dem Gerät: Tondateien liegen in IndexedDB, die App selbst im Service-Worker-Cache. */
 
-const APP_VERSION = 5;
+const APP_VERSION = 6;
 
 /* ===================== Helfer ===================== */
 const $ = (s, el = document) => el.querySelector(s);
@@ -124,7 +124,7 @@ const idbPut = (s, v, k) => idb(s, 'readwrite', (st) => (k === undefined ? st.pu
 const idbDel = (s, k) => idb(s, 'readwrite', (st) => st.delete(k));
 
 /* ===================== Zustand ===================== */
-const defaultSettings = () => ({ fadeAll: 3, instant: false, keepAwake: true });
+const defaultSettings = () => ({ fadeAll: 3, instant: false, keepAwake: true, cueMode: false, cueFadePrev: false });
 let state = { folders: [], activeFolder: null, settings: defaultSettings() };
 const audioMeta = new Map(); // id -> {id,name,type,size,duration,peaks,peakMax}
 let editMode = false;
@@ -485,7 +485,11 @@ async function startTile(tile) {
 function toggleTile(tile) {
   ensureCtx();
   const v = voices.get(tile.id);
-  if (!v) { startTile(tile); return; }
+  if (!v) {
+    if (state.settings.cueMode) { const f = activeFolder(), i = f.tiles.indexOf(tile); if (i >= 0) { cuePos.set(f.id, i + 1); updateCue(); } }
+    startTile(tile);
+    return;
+  }
   if (v.state === 'paused') { v.resume(); watchVoice(v); }
   else if (v.state === 'fading') v.stop();               // während des Ausblendens nochmal tippen = sofort aus
   else if (tile.fadeOut > 0) v.fadeOut(+tile.fadeOut);
@@ -512,6 +516,57 @@ function stopAll() {
   liveVoices().forEach((v) => v.stop());
   changed();
 }
+/* ---------- Ein-Knopf-Modus: WEITER spielt die Kästen des Ordners der Reihe nach ---------- */
+const cuePos = new Map(); // Ordner-ID -> Index des nächsten Kastens
+const cueIndex = (f) => clamp(cuePos.get(f.id) || 0, 0, f.tiles.length);
+function cueGo() {
+  const f = activeFolder();
+  let i = cueIndex(f);
+  while (i < f.tiles.length && !audioMeta.has(f.tiles[i].audioId)) i++; // Kästen ohne Ton überspringen
+  if (i >= f.tiles.length) { cuePos.set(f.id, f.tiles.length); updateCue(); toast('Ende der Liste erreicht – „Von vorn“ startet wieder bei 1.'); return; }
+  ensureCtx();
+  const tile = f.tiles[i];
+  if (state.settings.cueFadePrev) {
+    for (const v of liveVoices()) if (v.key !== tile.id) v.fadeOut(Math.max(0.5, +v.tile.fadeOut || 0));
+  }
+  const old = voices.get(tile.id);
+  if (old) old.stop();
+  startTile(tile);
+  cuePos.set(f.id, i + 1);
+  updateCue();
+}
+function cueStep(d) {
+  const f = activeFolder();
+  cuePos.set(f.id, clamp(cueIndex(f) + d, 0, f.tiles.length));
+  updateCue();
+}
+function updateCue() {
+  const bar = $('#cuebar');
+  const f = activeFolder();
+  const i = cueIndex(f);
+  document.querySelectorAll('.tile.cue-next').forEach((n) => n.classList.remove('cue-next'));
+  if (!bar) return;
+  const t = f.tiles[i];
+  const ref = t && tileRefs.get(t.id);
+  if (ref) ref.el.classList.add('cue-next');
+  $('.cue-what', bar).textContent = t ? (i + 1) + ' · ' + (t.name || 'Ohne Namen') : 'Ende der Liste';
+  $('.cue-go', bar).classList.toggle('end', !t);
+}
+function renderCueBar() {
+  const old = $('#cuebar');
+  if (old) old.remove();
+  document.body.classList.toggle('cue', !editMode && !!state.settings.cueMode);
+  if (editMode || !state.settings.cueMode) return;
+  const bar = h('div', { id: 'cuebar' },
+    h('button', { class: 'cue-nav', title: 'Zurück (Pfeil links)', html: ICONS.left, onclick: () => cueStep(-1) }),
+    h('button', { class: 'cue-go', title: 'Nächster Ton (Leertaste)', onclick: cueGo },
+      h('span', { class: 'cue-ic', html: ICONS.play }), h('span', { class: 'cue-lbl' }, 'WEITER'), h('span', { class: 'cue-what' })),
+    h('button', { class: 'cue-nav', title: 'Überspringen (Pfeil rechts)', html: ICONS.right, onclick: () => cueStep(1) }),
+    h('button', { class: 'cue-reset', onclick: () => { cuePos.set(activeFolder().id, 0); updateCue(); } }, 'Von vorn'));
+  document.body.appendChild(bar);
+  updateCue();
+}
+
 function fadeAll() {
   ensureCtx();
   startGen++;
@@ -576,6 +631,7 @@ function render() {
   document.body.classList.toggle('editing', editMode);
   renderTop();
   renderGrid();
+  renderCueBar();
 }
 function ctrlBtn(icon, label, fn, cls) {
   return h('button', { class: 'cbtn ' + (cls || ''), onclick: fn }, h('span', { class: 'ci', html: ICONS[icon] }), h('span', { class: 'cl' }, label));
@@ -646,7 +702,12 @@ function renderGrid() {
   }
   if (!isStandalone() && !localStorage.getItem('bt-hide-install')) {
     const b = h('div', { class: 'banner' }, h('b', null, 'Als App installieren: '),
-      'In Safari unten bzw. oben auf das Teilen-Symbol tippen und „Zum Home-Bildschirm“ wählen. Danach öffnest du Bühnenton über das Symbol auf dem Home-Bildschirm – es funktioniert dann auch ganz ohne WLAN und Internet.',
+      isIOS()
+        ? 'In Safari unten bzw. oben auf das Teilen-Symbol tippen und „Zum Home-Bildschirm“ wählen. Danach öffnest du Bühnenton über das Symbol auf dem Home-Bildschirm – es funktioniert dann auch ganz ohne WLAN und Internet.'
+        : installPrompt
+          ? ['Auf „Jetzt installieren“ klicken. Danach startest du Bühnenton wie ein normales Programm (Startmenü/Taskleiste) – es funktioniert dann auch ganz ohne Internet. ',
+            h('button', { class: 'btn sm primary', style: 'position:static;width:auto;height:auto;color:#fff;margin-top:8px;display:block', onclick: installApp }, 'Jetzt installieren')]
+          : 'In Google Chrome oder Microsoft Edge öffnen und oben rechts in der Adresszeile auf das Symbol „App installieren“ klicken (bei Edge: Menü ··· → Apps → „Diese Website als App installieren“). Danach funktioniert es auch ganz ohne Internet.',
       h('button', { onclick: () => { try { localStorage.setItem('bt-hide-install', '1'); } catch (e) { /* egal */ } b.remove(); } }, '×'));
     main.appendChild(b);
   }
@@ -654,6 +715,16 @@ function renderGrid() {
   for (const [id, ref] of tileRefs) updateTileRef(ref, voices.get(id));
   requestAnimationFrame(drawTileWaves);
   updateStatus();
+  updateCue();
+}
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let installPrompt = null;
+async function installApp() {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  try { await installPrompt.userChoice; } catch (e) { /* egal */ }
+  installPrompt = null;
+  renderGrid();
 }
 function isStandalone() {
   return window.navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
@@ -667,7 +738,9 @@ function tileEl(t) {
   const cv = h('canvas', { class: 'wave' });
   const idleRem = meta ? '-' + fmt(region(t, meta.duration).end - region(t, meta.duration).start) : '';
   const elp = h('span', null, '0:00.0'), rem = h('span', null, idleRem);
+  const cueNo = state.settings.cueMode && !editMode ? activeFolder().tiles.indexOf(t) + 1 : 0;
   const badges = h('div', { class: 'badges' },
+    cueNo ? h('span', { class: 'badge num' }, String(cueNo)) : null,
     t.loop ? h('span', { class: 'badge', html: ICONS.loop }) : null,
     t.solo ? h('span', { class: 'badge' }, 'S') : null,
     t.hold ? h('span', { class: 'badge' }, 'Halten') : null);
@@ -1538,22 +1611,28 @@ function openSettings() {
     rangeRow('Ausblenden', { min: 0.5, max: 10, step: 0.5, value: s.fadeAll, show: secs, onInput: (v) => { s.fadeAll = v; save(); } }),
     h('p', { class: 'hint', style: 'margin-top:-4px' }, 'So lange dauert es, bis beim Knopf „Ausblenden“ alle laufenden Töne leise geworden sind.'),
     switchRow('Sofort beim Berühren starten', s.instant, (v) => { s.instant = v; save(); }, 'Etwas schneller – aber beim Scrollen über die Kästen können dann Töne losgehen.'),
-    switchRow('Bildschirm nicht ausschalten', s.keepAwake, (v) => { s.keepAwake = v; save(); updateWakeLock(); }, 'Das iPad bleibt an, solange die App offen ist.'),
+    switchRow('Bildschirm nicht ausschalten', s.keepAwake, (v) => { s.keepAwake = v; save(); updateWakeLock(); }, 'Das Gerät bleibt an, solange die App offen ist.'),
+    h('div', { class: 'section' }, h('h3', null, 'Ein-Knopf-Modus'),
+      switchRow('Ein-Knopf-Modus (WEITER-Knopf)', s.cueMode, (v) => { s.cueMode = v; save(); }, 'Im Spielmodus erscheint unten ein großer WEITER-Knopf: 1× drücken = Kasten 1, nochmal = Kasten 2, nochmal = Kasten 3 … (Reihenfolge wie im Ordner). Kästen antippen geht weiterhin.'),
+      switchRow('Vorherigen Ton dabei ausblenden', s.cueFadePrev, (v) => { s.cueFadePrev = v; save(); }, 'Beim Drücken auf WEITER werden die gerade laufenden Töne ausgeblendet.'),
+      h('p', { class: 'hint' }, 'Mit Tastatur (Windows/iPad-Tastatur) oder Präsentations-Fernbedienung: Leertaste/Enter/Pfeil rechts = WEITER, Pfeil links = zurück, Esc = alle stoppen, F = alle ausblenden, P = Pause.')),
     h('div', { class: 'section' }, h('h3', null, 'Tondateien'), libBtn, storageL),
-    h('div', { class: 'section' }, h('h3', null, 'Sicherung'),
-      h('p', { class: 'hint' }, 'Speichert alle Ordner, Kästen und Töne in eine Datei (z. B. in „Dateien“ oder iCloud). Damit kannst du alles auf ein anderes Gerät übertragen oder wiederherstellen.'),
+    h('div', { class: 'section' }, h('h3', null, 'Teilen & Sichern'),
+      h('p', { class: 'hint' }, 'Ein Paket enthält Ordner, Kästen und Töne in einer Datei. Schick es per WhatsApp, Mail, AirDrop, USB-Stick … an jemand anderen (iPad oder Windows). Er öffnet Bühnenton, tippt hier auf „Paket öffnen“ und hat alles – und kann es auch bearbeiten. Schickt er dir das Paket zurück, werden deine Ordner damit aktualisiert. Auch gut als Sicherung.'),
       h('div', { class: 'btnrow' },
-        h('button', { class: 'btn', onclick: exportBackup }, 'Sicherung erstellen'),
-        h('button', { class: 'btn', onclick: importBackup }, 'Sicherung laden'))),
+        h('button', { class: 'btn primary', onclick: openShareDialog }, 'Paket verschicken / sichern'),
+        h('button', { class: 'btn', onclick: importBackup }, 'Paket öffnen'))),
+    installPrompt ? h('div', { class: 'section' }, h('button', { class: 'btn', onclick: installApp }, 'Als App auf diesem Computer installieren')) : null,
     h('div', { class: 'section' }, h('h3', null, 'So funktioniert’s'),
       h('ul', null,
         h('li', null, h('b', null, 'SPIELEN: '), 'Kasten antippen = Ton startet. Nochmal antippen = Ton stoppt (mit der eingestellten Ausblendzeit). Während er ausblendet nochmal tippen = sofort aus.'),
         h('li', null, 'Mehrere Töne können gleichzeitig laufen. ', h('b', null, 'Pause'), ' hält alle an (nochmal = weiter), ', h('b', null, 'Alle stoppen'), ' macht sofort alles aus, ', h('b', null, 'Ausblenden'), ' blendet alle zusammen sanft aus.'),
         h('li', null, h('b', null, 'BEARBEITEN: '), 'Kasten antippen = Name, Farbe, Lautstärke, Ein-/Ausblenden und Schnitt. Kasten gedrückt halten und ziehen = verschieben, auch auf einen anderen Ordner-Reiter.'),
         h('li', null, 'Den aktiven Ordner-Reiter im Bearbeiten-Modus antippen = Ordner umbenennen, Kastengröße ändern, löschen.'),
-        h('li', null, 'Für die Vorstellung: iPad auf „Nicht stören“ stellen und die App nicht verlassen – im Hintergrund hält iPadOS die Töne an.'))),
+        h('li', null, 'Für die Vorstellung: iPad auf „Nicht stören“ stellen und die App nicht verlassen – im Hintergrund hält iPadOS die Töne an.'),
+        h('li', null, 'Windows: In Chrome oder Edge öffnen und installieren. Bedienen mit Maus: klicken statt tippen, Kasten mit gedrückter Maustaste ziehen = verschieben. Pakete (.buehnenton) lassen sich nach der Installation per Doppelklick öffnen.'))),
     h('p', { class: 'hint', style: 'text-align:center;margin-top:18px' }, 'Bühnenton · Version ' + APP_VERSION + ' · alle Daten bleiben auf diesem Gerät'));
-  modal({ title: 'Einstellungen', body, cancel: null, onDone: () => { stopKey('libprev'); renderTop(); } });
+  modal({ title: 'Einstellungen', body, cancel: null, onDone: () => { stopKey('libprev'); render(); } });
 }
 function openLibrary() {
   const list = h('div', { class: 'lib' });
@@ -1600,13 +1679,30 @@ async function deleteAudio(id) {
 
 /* ---------- Sicherung ---------- */
 const MAGIC = 'BUEHNENTON1';
-async function exportBackup() {
-  const b = busy('Sicherung wird vorbereitet …');
+function openShareDialog() {
+  const chosen = new Set(state.folders.map((f) => f.id));
+  const list = h('div', null, state.folders.map((f) => switchRow(f.name, true, (v) => { if (v) chosen.add(f.id); else chosen.delete(f.id); },
+    f.tiles.length + (f.tiles.length === 1 ? ' Kasten' : ' Kästen'))));
+  const m = modal({
+    title: 'Paket verschicken', small: true, done: 'Weiter',
+    body: h('div', null, h('p', { class: 'hint', style: 'margin-top:0' }, 'Welche Ordner sollen ins Paket?'), list),
+    onDone: () => {
+      if (!chosen.size) { toast('Bitte mindestens einen Ordner auswählen.'); return false; }
+      setTimeout(() => exportBackup([...chosen]), 0);
+    },
+  });
+  return m;
+}
+async function exportBackup(folderIds) {
+  const b = busy('Paket wird vorbereitet …');
   let file;
   try {
-    const recs = (await idbAll('audio')) || [];
+    const folders = folderIds ? state.folders.filter((f) => folderIds.includes(f.id)) : state.folders;
+    const used = new Set();
+    for (const f of folders) for (const t of f.tiles) if (t.audioId) used.add(t.audioId);
+    const recs = ((await idbAll('audio')) || []).filter((r) => used.has(r.id));
     const header = { app: 'buehnenton', version: 1, created: new Date().toISOString(),
-      state: { folders: state.folders, settings: state.settings }, audio: [] };
+      state: { folders, settings: state.settings }, audio: [] };
     const parts = [];
     let offset = 0;
     for (const r of recs) {
@@ -1619,9 +1715,10 @@ async function exportBackup() {
     const len = new Uint8Array(4);
     new DataView(len.buffer).setUint32(0, hj.length);
     const d = new Date(), p2 = (n) => String(n).padStart(2, '0');
-    const name = 'Buehnenton-Sicherung-' + d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + '.buehnenton';
+    const label = folders.length === 1 ? folders[0].name.replace(/[^\wäöüÄÖÜß -]+/g, '').trim().replace(/\s+/g, '-') || 'Ordner' : 'Paket';
+    const name = 'Buehnenton-' + label + '-' + d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + '.buehnenton';
     file = new File([new TextEncoder().encode(MAGIC), len, hj, ...parts], name, { type: 'application/octet-stream' });
-  } catch (e) { b.done(); toast('Sicherung fehlgeschlagen: ' + e.message, 4500); return; }
+  } catch (e) { b.done(); toast('Paket konnte nicht erstellt werden: ' + e.message, 4500); return; }
   b.done();
   const canShare = navigator.canShare && navigator.canShare({ files: [file] });
   const download = () => {
@@ -1631,33 +1728,39 @@ async function exportBackup() {
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
   const m = modal({
-    title: 'Sicherung', small: true, done: null, cancel: 'Schließen',
+    title: 'Paket ist fertig', small: true, done: null, cancel: 'Schließen',
     body: h('div', null,
-      h('p', null, 'Die Sicherung ist fertig (' + mb(file.size) + ').'),
-      h('p', { class: 'hint' }, canShare ? 'Tippe auf „Sichern …“ und wähle dann „In Dateien sichern“ (oder AirDrop, iCloud …).' : 'Tippe auf „Herunterladen“.'),
+      h('p', null, '„' + file.name + '“ (' + mb(file.size) + ')'),
+      h('p', { class: 'hint' }, canShare
+        ? '„Teilen …“ öffnet WhatsApp, Mail, AirDrop, „In Dateien sichern“ usw. „Herunterladen“ speichert die Datei auf diesem Gerät.'
+        : '„Herunterladen“ speichert die Datei (meist im Ordner „Downloads“). Von dort kannst du sie per Mail, WhatsApp Web, USB-Stick usw. weitergeben.'),
+      h('p', { class: 'hint' }, 'Hinweis: WhatsApp und Mail haben Größengrenzen (etwa 100 MB bzw. 20 MB). Für große Pakete AirDrop, USB-Stick oder einen Cloud-Ordner verwenden.'),
       h('div', { class: 'btnrow' },
         canShare ? h('button', { class: 'btn primary', onclick: () => {
           navigator.share({ files: [file], title: file.name }).then(() => m.close()).catch((e) => { if (e.name !== 'AbortError') download(); });
-        } }, 'Sichern …') : null,
-        h('button', { class: 'btn', onclick: download }, 'Herunterladen'))),
+        } }, 'Teilen …') : null,
+        h('button', { class: canShare ? 'btn' : 'btn primary', onclick: download }, 'Herunterladen'))),
   });
 }
 async function importBackup() {
   const files = await pickFiles('', false);
-  const file = files[0];
-  if (!file) return;
+  if (files[0]) await importPackageFile(files[0]);
+}
+async function importPackageFile(file) {
   let header, base;
   try {
     const head = new Uint8Array(await file.slice(0, MAGIC.length + 4).arrayBuffer());
-    if (new TextDecoder().decode(head.slice(0, MAGIC.length)) !== MAGIC) throw new Error('Das ist keine Bühnenton-Sicherung.');
+    if (new TextDecoder().decode(head.slice(0, MAGIC.length)) !== MAGIC) throw new Error('Das ist kein Bühnenton-Paket (Datei endet auf .buehnenton).');
     const len = new DataView(head.buffer).getUint32(MAGIC.length);
     base = MAGIC.length + 4 + len;
     header = JSON.parse(new TextDecoder().decode(await file.slice(MAGIC.length + 4, base).arrayBuffer()));
   } catch (e) { toast(e.message || 'Datei konnte nicht gelesen werden.', 4500); return; }
   const folders = (header.state && header.state.folders) || [];
   const nt = folders.reduce((n, f) => n + f.tiles.length, 0);
-  if (!await confirmDlg('Sicherung vom ' + new Date(header.created).toLocaleString('de-DE') + ' laden? Sie enthält ' + folders.length + ' Ordner, ' + nt + ' Kästen und ' + header.audio.length + ' Töne. Ordner mit gleichem Ursprung werden ersetzt, alle anderen bleiben erhalten.', 'Laden')) return;
-  const b = busy('Sicherung wird geladen …');
+  const same = folders.filter((f) => folderById(f.id)).map((f) => '„' + f.name + '“');
+  if (!await confirmDlg('Paket vom ' + new Date(header.created).toLocaleString('de-DE') + ' öffnen? Es enthält ' + folders.length + ' Ordner (' + folders.map((f) => f.name).join(', ') + '), ' + nt + ' Kästen und ' + header.audio.length + ' Töne.'
+    + (same.length ? ' Diese Ordner gibt es schon und werden mit dem Stand aus dem Paket ersetzt: ' + same.join(', ') + '.' : '') + ' Alle anderen Ordner bleiben unverändert.', 'Öffnen')) return;
+  const b = busy('Paket wird geöffnet …');
   try {
     let i = 0;
     for (const a of header.audio) {
@@ -1680,7 +1783,7 @@ async function importBackup() {
     b.done();
     document.querySelectorAll('.ov').forEach((o) => o.remove());
     render();
-    toast('Sicherung geladen');
+    toast('Paket geöffnet');
   } catch (e) { b.done(); toast('Laden fehlgeschlagen: ' + e.message, 5000); }
 }
 
@@ -1730,6 +1833,32 @@ async function main() {
     });
   }
   window.addEventListener('pagehide', () => { flushSave(); wasHidden = true; });
+  // Tastatur (Windows, iPad-Tastatur, Präsentations-Fernbedienung)
+  const typing = (e) => e.target && e.target.closest && e.target.closest('input,textarea,select');
+  document.addEventListener('keydown', (e) => {
+    if (typing(e) || document.querySelector('.ov, .busy') || editMode || e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key;
+    let done = true;
+    if (k === ' ' || k === 'Enter' || k === 'ArrowRight' || k === 'PageDown' || k === 'ArrowDown') { if (state.settings.cueMode) { if (!e.repeat) cueGo(); } else done = false; }
+    else if (k === 'ArrowLeft' || k === 'PageUp' || k === 'ArrowUp') { if (state.settings.cueMode) cueStep(-1); else done = false; }
+    else if (k === 'Escape') stopAll();
+    else if (k === 'f' || k === 'F') fadeAll();
+    else if (k === 'p' || k === 'P') pauseAll();
+    else done = false;
+    if (done) { e.preventDefault(); ensureCtx(); }
+  }, true);
+  document.addEventListener('keyup', (e) => { if (e.key === ' ' && !typing(e)) e.preventDefault(); }, true);
+  // Knöpfe nach dem Klicken nicht im Fokus lassen (sonst löst die Leertaste sie erneut aus)
+  document.addEventListener('click', (e) => { const btn = e.target.closest && e.target.closest('button'); if (btn) btn.blur(); });
+  // Windows/Chrome/Edge: Installieren-Knopf anbieten
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; renderGrid(); });
+  window.addEventListener('appinstalled', () => { installPrompt = null; renderGrid(); });
+  // Windows: Paket per Doppelklick öffnen (installierte App)
+  if ('launchQueue' in window) {
+    window.launchQueue.setConsumer(async (params) => {
+      for (const fh of params.files || []) { try { await importPackageFile(await fh.getFile()); } catch (e) { toast('Paket konnte nicht geöffnet werden.'); } }
+    });
+  }
   window.addEventListener('pageshow', () => { wasHidden = true; });
   let rt = 0;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(drawTileWaves, 120); });

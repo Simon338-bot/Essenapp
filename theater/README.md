@@ -15,6 +15,20 @@ Töne und Musik fürs Theater: Kästen antippen, abspielen, gemeinsam ausblenden
 - **Pause** (alle anhalten / weiter), **Alle stoppen** (sofort), **Ausblenden** (alle gemeinsam, Dauer einstellbar).
 - Grüner Punkt am Ordner-Reiter = dort läuft gerade etwas.
 
+## Ein-Knopf-Modus
+Einstellungen → „Ein-Knopf-Modus“: Im Spielmodus erscheint unten ein großer **WEITER**-Knopf. Jeder Druck spielt den
+nächsten Kasten des Ordners (1, 2, 3 …). Pfeile = zurück/überspringen, „Von vorn“ = wieder bei 1.
+Tastatur/Fernbedienung: Leertaste, Enter, Pfeil rechts, Bild runter = WEITER · Pfeil links = zurück · Esc = alle stoppen ·
+F = alle ausblenden · P = Pause.
+
+## Pakete teilen
+Einstellungen → „Paket verschicken / sichern“: gewählte Ordner samt Tönen als eine `.buehnenton`-Datei
+(WhatsApp, Mail, AirDrop, USB-Stick …). Der Empfänger öffnet sie mit „Paket öffnen“ (Windows: nach der Installation
+auch per Doppelklick) und kann alles bearbeiten. Kommt das Paket zurück, werden gleiche Ordner aktualisiert.
+
+## Windows
+In Google Chrome oder Microsoft Edge öffnen und über „App installieren“ installieren. Bedienung mit der Maus wie am iPad.
+
 ## Bearbeiten
 - Ordner anlegen (**+ Ordner**), aktiven Reiter antippen = umbenennen, Kastengröße (klein/mittel/groß), Reihenfolge, löschen.
 - **+ Kasten** oder **Mehrere Töne** (legt für jede Datei einen Kasten an).

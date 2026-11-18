@@ -1,8 +1,8 @@
 // Service Worker: macht die App komplett offline nutzbar.
 // Alle Dateien kommen aus dem Zwischenspeicher (schnell, auch ohne WLAN).
 // Updates kommen über eine neue Versionsnummer hier: dann werden alle Dateien auf einmal neu geladen.
-const CACHE = 'buehnenton-v5';
-const ASSETS = ['./', 'index.html', 'styles.css?v=5', 'app.js?v=5', 'manifest.webmanifest',
+const CACHE = 'buehnenton-v6';
+const ASSETS = ['./', 'index.html', 'styles.css?v=6', 'app.js?v=6', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
