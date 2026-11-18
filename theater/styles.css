@@ -83,7 +83,8 @@ svg { width: 1em; height: 1em; fill: currentColor; flex: none; }
 .tile.playing { box-shadow: inset 0 0 0 3px #fff, 0 0 16px rgba(255,255,255,.35); filter: brightness(1.12); }
 .tile.fading { box-shadow: inset 0 0 0 3px var(--accent); }
 .tile.paused { box-shadow: inset 0 0 0 3px var(--blue); }
-.tile.paused .stateic { display: block; }
+.tile.paused .stateic, .tile.playing .stateic, .tile.fading .stateic { display: flex; }
+.tile .stateic svg { filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
 .tile.loading { opacity: .65; }
 body.editing .tile:not(.add-tile) { outline: 2px dashed rgba(255,255,255,.45); outline-offset: -5px; }
 .tile .grip { position: absolute; left: 0; top: 0; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center;

@@ -2,7 +2,7 @@
 /* Bühnenton – Töne fürs Theater.
    Alles läuft auf dem Gerät: Tondateien liegen in IndexedDB, die App selbst im Service-Worker-Cache. */
 
-const APP_VERSION = 3;
+const APP_VERSION = 4;
 
 /* ===================== Helfer ===================== */
 const $ = (s, el = document) => el.querySelector(s);
@@ -164,7 +164,11 @@ async function load() {
 /* iPad/iPhone: Nach einem App-Wechsel (Fotos, Dateien, andere App, Sperrbildschirm) bleibt der
    Audio-Kontext oft „hängen“ und lässt sich nicht mehr fortsetzen. Dann wird er bei der nächsten
    Berührung einfach neu erzeugt. */
-let ctx = null, master = null, ctxStuck = false, wasHidden = false, checkTimer = 0;
+/* Wichtig: iPadOS meldet nach einem App-Wechsel manchmal „running“, obwohl die Audio-Uhr steht
+   (kein Ton, keine Zeitanzeige). Deshalb wird nicht dem gemeldeten Zustand vertraut, sondern
+   regelmäßig geprüft, ob die Audio-Uhr (currentTime) wirklich weiterläuft. */
+let ctx = null, master = null, ctxStuck = false, wasHidden = false;
+let ctxBorn = 0, everRan = false, lastCT = -1, lastAdv = 0;
 function makeCtx() {
   try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* ältere Geräte */ }
   const AC = window.AudioContext || window.webkitAudioContext;
@@ -172,6 +176,33 @@ function makeCtx() {
   master = ctx.createGain();
   master.connect(ctx.destination);
   ctxStuck = false;
+  ctxBorn = performance.now(); everRan = false; lastCT = -1; lastAdv = 0;
+}
+function sampleCtx() { // merkt sich, wann die Audio-Uhr zuletzt weitergelaufen ist
+  if (!ctx) return;
+  const ct = ctx.currentTime, now = performance.now();
+  if (ct > lastCT + 0.0005) {
+    if (lastCT >= 0 || ct > 0) { lastAdv = now; if (ctx.state === 'running') everRan = true; }
+    lastCT = ct;
+  }
+}
+setInterval(sampleCtx, 120);
+function ctxHealthy() {
+  sampleCtx();
+  return ctx.state === 'running' && performance.now() - lastAdv < 400;
+}
+/* Nach dem Start eines Tons prüfen, ob er wirklich läuft. Falls nicht: nicht so tun, als ob,
+   sondern Kasten zurücksetzen, Audio beim nächsten Antippen neu starten und Bescheid geben. */
+function watchVoice(v) {
+  const c = ctx, ct0 = c.currentTime;
+  setTimeout(() => {
+    if (c !== ctx || v.state === 'done' || v.state === 'paused') return;
+    if (c.currentTime - ct0 > 0.1) return; // läuft
+    ctxStuck = true;
+    for (const o of [...voices.values()]) o.finish();
+    try { c.resume(); } catch (e) { /* egal */ }
+    toast('Der Ton war vom iPad blockiert – bitte nochmal antippen.', 4000);
+  }, 600);
 }
 function getCtx() {
   if (!ctx || ctx.state === 'closed') makeCtx();
@@ -188,7 +219,10 @@ function resetCtx() {
 }
 function ensureCtx() { // aus einer Berührung heraus aufrufen
   getCtx();
-  if (ctx.state !== 'running' && (ctxStuck || ctx.state === 'interrupted' || wasHidden)) resetCtx();
+  const age = performance.now() - ctxBorn;
+  // Neu erzeugen, wenn er blockiert ist – aber nicht, wenn er gerade eben (in dieser Berührung) erzeugt wurde
+  const bad = ctx.state === 'interrupted' || ctxStuck || (age > 800 && (wasHidden || everRan) && !ctxHealthy());
+  if (bad) resetCtx();
   wasHidden = false;
   if (ctx.state !== 'running') {
     ctx.resume().catch(() => {});
@@ -197,11 +231,6 @@ function ensureCtx() { // aus einer Berührung heraus aufrufen
       const b = ctx.createBuffer(1, 1, 22050), s = ctx.createBufferSource();
       s.buffer = b; s.connect(ctx.destination); s.start(0);
     } catch (e) { /* egal */ }
-    const c = ctx;
-    clearTimeout(checkTimer);
-    checkTimer = setTimeout(() => {
-      if (c === ctx && c.state !== 'running') { ctxStuck = true; toast('Ton wird neu gestartet – bitte nochmal antippen.'); }
-    }, 700);
   }
   return ctx;
 }
@@ -450,13 +479,14 @@ async function startTile(tile) {
   const v = new Voice(tile.id, tile, buf);
   voices.set(tile.id, v);
   v.play(v.rs, +tile.fadeIn || 0);
+  watchVoice(v);
   changed();
 }
 function toggleTile(tile) {
   ensureCtx();
   const v = voices.get(tile.id);
   if (!v) { startTile(tile); return; }
-  if (v.state === 'paused') v.resume();
+  if (v.state === 'paused') { v.resume(); watchVoice(v); }
   else if (v.state === 'fading') v.stop();               // während des Ausblendens nochmal tippen = sofort aus
   else if (tile.fadeOut > 0) v.fadeOut(+tile.fadeOut);
   else v.stop();
@@ -473,7 +503,7 @@ function pauseAll() {
   const vs = liveVoices();
   const running = vs.filter((v) => v.state === 'playing' || v.state === 'fading');
   if (running.length) running.forEach((v) => v.pause());
-  else vs.filter((v) => v.state === 'paused').forEach((v) => v.resume());
+  else vs.filter((v) => v.state === 'paused').forEach((v) => { v.resume(); watchVoice(v); });
   changed();
 }
 function stopAll() {
@@ -511,6 +541,7 @@ function updateTileRef(ref, v) {
     ref.el.classList.remove('playing', 'fading', 'paused', 'loading');
     if (st !== 'idle' && st !== 'done') ref.el.classList.add(st);
     ref.st = st;
+    ref.ic.innerHTML = st === 'paused' ? ICONS.pause : st === 'fading' ? ICONS.fade : st === 'playing' ? ICONS.play : '';
   }
   if (!v || v.state === 'done') {
     if (ref.on) {
@@ -640,7 +671,8 @@ function tileEl(t) {
     t.loop ? h('span', { class: 'badge', html: ICONS.loop }) : null,
     t.solo ? h('span', { class: 'badge' }, 'S') : null,
     t.hold ? h('span', { class: 'badge' }, 'Halten') : null);
-  el.append(prog, h('div', { class: 'stateic', html: ICONS.pause }), h('div', { class: 'thead' }, t.name || 'Ohne Namen'), badges,
+  const stIc = h('div', { class: 'stateic' });
+  el.append(prog, stIc, h('div', { class: 'thead' }, t.name || 'Ohne Namen'), badges,
     h('div', { class: 'wwrap' }, meta ? cv : h('div', { class: 'nofile' }, 'kein Ton')),
     h('div', { class: 'times' }, elp, rem));
   if (editMode) {
@@ -650,7 +682,7 @@ function tileEl(t) {
   el.addEventListener('pointerdown', (e) => onTileDown(e, t, el));
   if (editMode && hasTouch) el.addEventListener('touchstart', (e) => editTouchStart(e, t, el), { passive: true });
   el.addEventListener('contextmenu', (e) => e.preventDefault());
-  tileRefs.set(t.id, { el, prog, elp, rem, cv, tile: t, idleRem, st: 'idle', on: false });
+  tileRefs.set(t.id, { el, prog, elp, rem, cv, ic: stIc, tile: t, idleRem, st: 'idle', on: false });
   return el;
 }
 function drawTileWaves() {
@@ -1240,6 +1272,7 @@ function openTileDialog(folder, tile) {
     const v = new Voice('preview', t, ed.buf);
     voices.set('preview', v);
     v.play(pos, pos <= r.start + 0.01 ? +t.fadeIn || 0 : 0);
+    watchVoice(v);
     changed();
   }
   function togglePreview() { if (previewing()) stopKey('preview'); else startPreview(); }
@@ -1538,6 +1571,7 @@ async function main() {
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') { flushSave(); wasHidden = true; }
+    else sampleCtx();
     updateWakeLock();
   });
   if ('serviceWorker' in navigator) {
@@ -1548,7 +1582,8 @@ async function main() {
       else toast('Neue Version geladen – wird beim nächsten Öffnen aktiv.');
     });
   }
-  window.addEventListener('pagehide', flushSave);
+  window.addEventListener('pagehide', () => { flushSave(); wasHidden = true; });
+  window.addEventListener('pageshow', () => { wasHidden = true; });
   let rt = 0;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(drawTileWaves, 120); });
 }
