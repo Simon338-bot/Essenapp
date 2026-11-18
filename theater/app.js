@@ -2,7 +2,7 @@
 /* Bühnenton – Töne fürs Theater.
    Alles läuft auf dem Gerät: Tondateien liegen in IndexedDB, die App selbst im Service-Worker-Cache. */
 
-const APP_VERSION = 4;
+const APP_VERSION = 5;
 
 /* ===================== Helfer ===================== */
 const $ = (s, el = document) => el.querySelector(s);
@@ -247,7 +247,7 @@ function decode(ab) {
 /* Dekodierte Töne im Arbeitsspeicher halten (damit sie sofort starten) */
 const bufCache = new Map(); // audioId -> {buf, bytes, used}
 const bufLoading = new Map();
-const BUF_LIMIT = 450e6;
+const BUF_LIMIT = 380e6;
 function putBuf(id, buf) {
   bufCache.set(id, { buf, bytes: buf.length * buf.numberOfChannels * 4, used: performance.now() });
   trimCache();
@@ -955,14 +955,161 @@ function pickFiles(accept, multiple) {
 const AUDIO_ACCEPT = 'audio/*,.mp3,.m4a,.wav,.aif,.aiff,.aac,.caf,.flac,.ogg,.opus,.mp4,.m4v,.mov';
 const PHOTO_ACCEPT = 'video/*,audio/*';
 
-async function importFile(file) {
-  const ab = await file.arrayBuffer();
+/* ---------- Ton aus Videos holen ----------
+   Videos (MP4/MOV vom iPhone/iPad) sind oft mehrere hundert MB groß. Statt das ganze Video in den
+   Speicher zu laden (dann stürzt die Seite auf dem iPad ab), wird nur die Tonspur (AAC) Stück für
+   Stück herausgelesen und als AAC-Datei (ADTS) gespeichert – meist nur wenige MB. */
+const fourcc = (dv, o) => String.fromCharCode(dv.getUint8(o), dv.getUint8(o + 1), dv.getUint8(o + 2), dv.getUint8(o + 3));
+const u64 = (dv, o) => dv.getUint32(o) * 4294967296 + dv.getUint32(o + 4);
+async function readDV(file, pos, len) { return new DataView(await file.slice(pos, pos + len).arrayBuffer()); }
+function boxesIn(dv, start, end) {
+  const out = [];
+  let p = start;
+  while (p + 8 <= end) {
+    let size = dv.getUint32(p), hdr = 8;
+    const type = fourcc(dv, p + 4);
+    if (size === 1) { size = u64(dv, p + 8); hdr = 16; } else if (size === 0) size = end - p;
+    if (size < 8 || p + size > end) break;
+    out.push({ type, start: p, body: p + hdr, end: p + size });
+    p += size;
+  }
+  return out;
+}
+const child = (dv, box, type) => boxesIn(dv, box.body, box.end).find((b) => b.type === type);
+function readDescLen(dv, p) { let len = 0, n = 0, b; do { b = dv.getUint8(p + n); len = (len << 7) | (b & 0x7f); n++; } while ((b & 0x80) && n < 4); return [len, n]; }
+function parseEsds(dv, s, e) {
+  // im mp4a-Eintrag nach „esds“ suchen (bei QuickTime steckt es manchmal in einem „wave“-Kasten)
+  for (let i = s; i + 4 <= e; i++) {
+    if (fourcc(dv, i) !== 'esds') continue;
+    let p = i + 4 + 4; // Typ + Version/Flags
+    if (dv.getUint8(p) !== 0x03) return null;
+    let [, n] = readDescLen(dv, p + 1); p += 1 + n;
+    const flags = dv.getUint8(p + 2); p += 3;
+    if (flags & 0x80) p += 2;
+    if (flags & 0x40) p += 1 + dv.getUint8(p);
+    if (flags & 0x20) p += 2;
+    if (dv.getUint8(p) !== 0x04) return null;
+    [, n] = readDescLen(dv, p + 1); p += 1 + n;
+    const oti = dv.getUint8(p); p += 13;
+    if (oti !== 0x40 && oti !== 0x67) return null; // nur AAC
+    if (dv.getUint8(p) !== 0x05) return null;
+    [, n] = readDescLen(dv, p + 1); p += 1 + n;
+    // AudioSpecificConfig lesen
+    let bitPos = p * 8;
+    const bits = (k) => { let v = 0; for (let j = 0; j < k; j++, bitPos++) v = (v << 1) | ((dv.getUint8(bitPos >> 3) >> (7 - (bitPos & 7))) & 1); return v; };
+    let aot = bits(5); if (aot === 31) aot = 32 + bits(6);
+    let fi = bits(4); let rate = 0;
+    if (fi === 15) rate = bits(24);
+    const ch = bits(4);
+    if (aot === 5 || aot === 29) { const ef = bits(4); if (ef === 15) bits(24); aot = bits(5); }
+    if (fi === 15) {
+      const rates = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+      fi = rates.reduce((best, r, k) => (Math.abs(r - rate) < Math.abs(rates[best] - rate) ? k : best), 0);
+    }
+    if (aot < 1 || aot > 4 || ch < 1 || ch > 7) return null;
+    return { profile: aot - 1, fi, ch };
+  }
+  return null;
+}
+async function extractAacFromMp4(file, onProgress) {
+  // 1. „moov“ finden (steht am Anfang oder am Ende der Datei)
+  let pos = 0, moov = null;
+  while (pos + 8 <= file.size) {
+    const dv = await readDV(file, pos, 16);
+    let size = dv.getUint32(0);
+    const type = fourcc(dv, 4);
+    if (size === 1) size = u64(dv, 8); else if (size === 0) size = file.size - pos;
+    if (size < 8 || !/^[\x20-\x7e]{4}$/.test(type)) return null;
+    if (type === 'moov') { moov = { pos, size }; break; }
+    pos += size;
+  }
+  if (!moov || moov.size > 200e6) return null;
+  const dv = await readDV(file, moov.pos, moov.size);
+  const root = { body: 8, end: moov.size };
+  // 2. Tonspur mit AAC suchen
+  for (const trak of boxesIn(dv, root.body, root.end).filter((b) => b.type === 'trak')) {
+    const mdia = child(dv, trak, 'mdia'); if (!mdia) continue;
+    const hdlr = child(dv, mdia, 'hdlr'); if (!hdlr || fourcc(dv, hdlr.body + 8) !== 'soun') continue;
+    const minf = child(dv, mdia, 'minf'); const stbl = minf && child(dv, minf, 'stbl'); if (!stbl) continue;
+    const stsd = child(dv, stbl, 'stsd'); if (!stsd) continue;
+    const entry = boxesIn(dv, stsd.body + 8, stsd.end)[0];
+    if (!entry || entry.type !== 'mp4a') continue;
+    const cfg = parseEsds(dv, entry.body, entry.end); if (!cfg) continue;
+    // Größen der Pakete
+    const sizes = [];
+    const stsz = child(dv, stbl, 'stsz'), stz2 = child(dv, stbl, 'stz2');
+    if (stsz) {
+      const fixed = dv.getUint32(stsz.body + 4), cnt = dv.getUint32(stsz.body + 8);
+      for (let i = 0; i < cnt; i++) sizes.push(fixed || dv.getUint32(stsz.body + 12 + i * 4));
+    } else if (stz2) {
+      const fs = dv.getUint8(stz2.body + 7), cnt = dv.getUint32(stz2.body + 8);
+      for (let i = 0; i < cnt; i++) {
+        if (fs === 16) sizes.push(dv.getUint16(stz2.body + 12 + i * 2));
+        else if (fs === 8) sizes.push(dv.getUint8(stz2.body + 12 + i));
+        else sizes.push((dv.getUint8(stz2.body + 12 + (i >> 1)) >> ((i & 1) ? 0 : 4)) & 15);
+      }
+    } else continue;
+    // Lage der Blöcke
+    const offs = [];
+    const stco = child(dv, stbl, 'stco'), co64 = child(dv, stbl, 'co64');
+    if (stco) { const n = dv.getUint32(stco.body + 4); for (let i = 0; i < n; i++) offs.push(dv.getUint32(stco.body + 8 + i * 4)); }
+    else if (co64) { const n = dv.getUint32(co64.body + 4); for (let i = 0; i < n; i++) offs.push(u64(dv, co64.body + 8 + i * 8)); }
+    else continue;
+    const stsc = child(dv, stbl, 'stsc'); if (!stsc) continue;
+    const sc = [];
+    { const n = dv.getUint32(stsc.body + 4); for (let i = 0; i < n; i++) sc.push([dv.getUint32(stsc.body + 8 + i * 12), dv.getUint32(stsc.body + 12 + i * 12)]); }
+    // 3. Blöcke einzeln lesen und mit ADTS-Kopf zusammensetzen
+    const total = sizes.reduce((a, b) => a + b, 0) + 7 * sizes.length;
+    const out = new Uint8Array(total);
+    let o = 0, s = 0, k = 0;
+    for (let c = 0; c < offs.length && s < sizes.length; c++) {
+      while (k + 1 < sc.length && sc[k + 1][0] <= c + 1) k++;
+      const per = sc[k][1];
+      let len = 0;
+      for (let j = 0; j < per && s + j < sizes.length; j++) len += sizes[s + j];
+      const chunk = new Uint8Array(await file.slice(offs[c], offs[c] + len).arrayBuffer());
+      let q = 0;
+      for (let j = 0; j < per && s < sizes.length; j++, s++) {
+        const sz = sizes[s], fl = sz + 7;
+        out[o] = 0xff; out[o + 1] = 0xf1;
+        out[o + 2] = ((cfg.profile & 3) << 6) | ((cfg.fi & 15) << 2) | ((cfg.ch >> 2) & 1);
+        out[o + 3] = ((cfg.ch & 3) << 6) | ((fl >> 11) & 3);
+        out[o + 4] = (fl >> 3) & 0xff;
+        out[o + 5] = ((fl & 7) << 5) | 0x1f;
+        out[o + 6] = 0xfc;
+        out.set(chunk.subarray(q, q + sz), o + 7);
+        o += fl; q += sz;
+      }
+      if (onProgress && (c & 15) === 0) onProgress(c / offs.length);
+    }
+    return o === total ? out.buffer : out.slice(0, o).buffer;
+  }
+  return null;
+}
+const isVideoLike = (file) => /^video\//.test(file.type) || /\.(mp4|m4v|mov|3gp)$/i.test(file.name || '');
+
+async function importFile(file, onProgress) {
+  let ab = null, type = file.type || '';
+  if (isVideoLike(file) || /\.m4a$/i.test(file.name || '')) {
+    try { ab = await extractAacFromMp4(file, onProgress); } catch (e) { ab = null; }
+    if (ab) type = 'audio/aac';
+  }
+  if (!ab) {
+    if (file.size > 250e6) {
+      throw new Error('„' + file.name + '“ ist zu groß (' + mb(file.size) + ') und der Ton konnte nicht direkt herausgelesen werden. Tipp: Das Video in der Fotos-App kürzen oder als Audiodatei speichern.');
+    }
+    ab = await file.arrayBuffer();
+  }
+  // erst die Datei sichern (Blob kopiert die Daten), dann dekodieren – spart eine Kopie im Speicher
+  const blob = new Blob([ab], { type: type || 'application/octet-stream' });
+  const size = ab.byteLength;
   let buf;
-  try { buf = await decode(ab.slice(0)); }
-  catch (e) { throw new Error('„' + file.name + '“ konnte nicht gelesen werden. Bitte eine Audiodatei (z. B. MP3, M4A, WAV) wählen.'); }
+  try { buf = await decode(ab); }
+  catch (e) { throw new Error('„' + file.name + '“ konnte nicht gelesen werden. Bitte eine Audio- oder Videodatei (z. B. MP3, M4A, WAV, MOV, MP4) wählen.'); }
+  ab = null;
   const p = computePeaks(buf, 600);
-  const rec = { id: uid(), name: file.name || 'Ton', type: file.type || '', size: ab.byteLength, duration: buf.duration,
-    peaks: p.data, peakMax: p.max, added: Date.now(), blob: new Blob([ab], { type: file.type || 'application/octet-stream' }) };
+  const rec = { id: uid(), name: file.name || 'Ton', type, size, duration: buf.duration,
+    peaks: p.data, peakMax: p.max, added: Date.now(), blob };
   try { await idbPut('audio', rec); }
   catch (e) { throw new Error('Speichern fehlgeschlagen – ist der Speicher voll? (' + e.message + ')'); }
   audioMeta.set(rec.id, metaOf(rec));
@@ -978,7 +1125,7 @@ async function bulkImport() {
   for (let i = 0; i < files.length; i++) {
     b.set('Töne werden importiert … ' + (i + 1) + ' von ' + files.length);
     try {
-      const m = await importFile(files[i]);
+      const m = await importFile(files[i], (fr) => b.set('Töne werden importiert … ' + (i + 1) + ' von ' + files.length + ' (' + Math.round(fr * 100) + ' %)'));
       const t = newTile(f);
       t.audioId = m.id; t.name = baseName(m.name);
       f.tiles.push(t);
@@ -1051,7 +1198,7 @@ function openTileDialog(folder, tile) {
     const files = await pickFiles(accept, false);
     if (!files.length) return;
     const b = busy('Ton wird importiert …');
-    try { const m = await importFile(files[0]); setAudio(m.id); }
+    try { const m = await importFile(files[0], (f) => b.set('Ton wird aus dem Video geholt … ' + Math.round(f * 100) + ' %')); setAudio(m.id); }
     catch (e) { toast(e.message, 4500); }
     finally { b.done(); }
   };
