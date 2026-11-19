@@ -2,7 +2,7 @@
 /* Bühnenton – Töne fürs Theater.
    Alles läuft auf dem Gerät: Tondateien liegen in IndexedDB, die App selbst im Service-Worker-Cache. */
 
-const APP_VERSION = 7;
+const APP_VERSION = 8;
 
 /* ===================== Helfer ===================== */
 const $ = (s, el = document) => el.querySelector(s);
@@ -95,12 +95,14 @@ let dbPromise = null;
 function db() {
   if (!dbPromise) {
     dbPromise = new Promise((res, rej) => {
-      const r = indexedDB.open('buehnenton', 1);
+      const r = indexedDB.open('buehnenton', 2);
       r.onupgradeneeded = () => {
         const d = r.result;
         if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
-        if (!d.objectStoreNames.contains('audio')) d.createObjectStore('audio', { keyPath: 'id' });
+        if (!d.objectStoreNames.contains('audio')) d.createObjectStore('audio', { keyPath: 'id' }); // Infos (Name, Länge, Wellenform)
+        if (!d.objectStoreNames.contains('data')) d.createObjectStore('data');                       // Tondaten als ArrayBuffer
       };
+      r.onblocked = () => toast('Bitte Bühnenton in anderen Fenstern/Tabs schließen.', 6000);
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
     });
@@ -122,11 +124,21 @@ const idbGet = (s, k) => idb(s, 'readonly', (st) => st.get(k));
 const idbAll = (s) => idb(s, 'readonly', (st) => st.getAll());
 const idbPut = (s, v, k) => idb(s, 'readwrite', (st) => (k === undefined ? st.put(v) : st.put(v, k)));
 const idbDel = (s, k) => idb(s, 'readwrite', (st) => st.delete(k));
+const idbKeys = (s) => idb(s, 'readonly', (st) => st.getAllKeys());
+/* Tondaten lesen: neues Format (ArrayBuffer in „data“), sonst altes Format (Blob im Info-Eintrag) */
+async function readAudioData(id) {
+  const ab = await idbGet('data', id);
+  if (ab) return ab;
+  const rec = await idbGet('audio', id);
+  if (rec && rec.blob) return rec.blob.arrayBuffer();
+  return null;
+}
 
 /* ===================== Zustand ===================== */
 const defaultSettings = () => ({ fadeAll: 3, instant: false, keepAwake: true, cueMode: false, cueFadePrev: false });
 let state = { folders: [], activeFolder: null, settings: defaultSettings() };
 const audioMeta = new Map(); // id -> {id,name,type,size,duration,peaks,peakMax}
+const missingAudio = new Map(); // id -> Dateiname: Info vorhanden, Tondaten verloren
 let editMode = false;
 
 const newFolder = (name) => ({ id: uid(), name, size: 'M', tiles: [] });
@@ -139,23 +151,63 @@ const activeFolder = () => state.folders.find((f) => f.id === state.activeFolder
 const folderById = (id) => state.folders.find((f) => f.id === id);
 const folderOfTile = (tileId) => state.folders.find((f) => f.tiles.some((t) => t.id === tileId));
 
-let saveTimer = 0;
+let saveTimer = 0, dirty = false, myRev = 0, conflictShown = false;
 function save() {
+  dirty = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(flushSave, 200);
 }
 function flushSave() {
   clearTimeout(saveTimer);
-  return idbPut('kv', JSON.parse(JSON.stringify(state)), 'state').catch((e) => toast('Speichern fehlgeschlagen: ' + e.message));
+  if (!dirty) return Promise.resolve();
+  const snapshot = JSON.parse(JSON.stringify(state));
+  return db().then((d) => new Promise((res, rej) => {
+    const tx = d.transaction('kv', 'readwrite'), st = tx.objectStore('kv');
+    let conflict = false;
+    const g = st.get('state');
+    g.onsuccess = () => {
+      const cur = g.result;
+      if (cur && (cur.rev || 0) > myRev) { conflict = true; return; } // anderes Fenster hat inzwischen gespeichert
+      snapshot.rev = myRev + 1;
+      st.put(snapshot, 'state');
+    };
+    tx.oncomplete = () => {
+      if (conflict) onSaveConflict();
+      else { myRev = snapshot.rev; state.rev = myRev; dirty = false; }
+      res();
+    };
+    tx.onerror = () => rej(tx.error);
+    tx.onabort = () => rej(tx.error || new Error('Speichern abgebrochen'));
+  })).catch((e) => toast('Speichern fehlgeschlagen: ' + e.message, 5000));
+}
+function onSaveConflict() {
+  if (conflictShown) return;
+  conflictShown = true;
+  const m = modal({ title: 'Bühnenton ist zweimal offen', small: true, cancel: null, done: 'Neu laden',
+    body: h('p', { style: 'font-size:17px;line-height:1.45' }, 'Die App ist noch in einem anderen Fenster oder Tab offen und wurde dort geändert. Damit nichts überschrieben wird, lädt dieses Fenster jetzt den neuesten Stand. Bitte nur ein Fenster benutzen.'),
+    onDone: () => { location.reload(); } });
+  return m;
 }
 const metaOf = (r) => ({ id: r.id, name: r.name, type: r.type, size: r.size, duration: r.duration, peaks: r.peaks, peakMax: r.peakMax || 1 });
+const infoOf = (r) => ({ id: r.id, name: r.name, type: r.type, size: r.size, duration: r.duration, peaks: r.peaks, peakMax: r.peakMax || 1, added: r.added });
 
 async function load() {
   const s = await idbGet('kv', 'state');
   if (s && Array.isArray(s.folders)) {
-    state = { folders: s.folders, activeFolder: s.activeFolder, settings: Object.assign(defaultSettings(), s.settings || {}) };
+    state = { folders: s.folders, activeFolder: s.activeFolder, settings: Object.assign(defaultSettings(), s.settings || {}), rev: s.rev || 0 };
+    myRev = s.rev || 0;
   }
-  for (const r of (await idbAll('audio')) || []) audioMeta.set(r.id, metaOf(r));
+  const dataKeys = new Set((await idbKeys('data')) || []);
+  for (const r of (await idbAll('audio')) || []) {
+    if (!dataKeys.has(r.id) && r.blob) { // Umzug vom alten Speicherformat
+      try {
+        const ab = await r.blob.arrayBuffer();
+        if (ab && ab.byteLength) { await idbPut('data', ab, r.id); dataKeys.add(r.id); await idbPut('audio', infoOf(r)); }
+      } catch (e) { /* Blob nicht mehr lesbar */ }
+    }
+    if (dataKeys.has(r.id)) audioMeta.set(r.id, metaOf(r));
+    else missingAudio.set(r.id, r.name);
+  }
   if (!state.folders.length) state.folders.push(newFolder('Vorstellung'));
   if (!folderById(state.activeFolder)) state.activeFolder = state.folders[0].id;
 }
@@ -271,9 +323,9 @@ function getBuffer(id) {
   if (c) { c.used = performance.now(); return Promise.resolve(c.buf); }
   if (bufLoading.has(id)) return bufLoading.get(id);
   const p = (async () => {
-    const rec = await idbGet('audio', id);
-    if (!rec || !rec.blob) throw new Error('Tondatei fehlt');
-    const buf = await decode(await rec.blob.arrayBuffer());
+    const ab = await readAudioData(id);
+    if (!ab) throw new Error('Tondatei fehlt');
+    const buf = await decode(ab);
     putBuf(id, buf);
     return buf;
   })();
@@ -460,7 +512,8 @@ class Voice {
 const liveVoices = () => [...voices.values()].filter((v) => v.key !== 'preview' && v.key !== 'libprev');
 
 async function startTile(tile) {
-  if (!tile.audioId || !audioMeta.has(tile.audioId)) { toast('Diesem Kasten ist noch kein Ton zugeordnet.'); return; }
+  if (!tile.audioId) { toast('Diesem Kasten ist noch kein Ton zugeordnet.'); return; }
+  if (!audioMeta.has(tile.audioId)) { toast('Der Ton dieses Kastens fehlt. Bitte unter BEARBEITEN neu auswählen.', 4000); return; }
   if (pending.has(tile.id)) return;
   const gen = startGen;
   pending.add(tile.id); changed();
@@ -694,6 +747,13 @@ function renderGrid() {
     grid.appendChild(h('button', { class: 'tile add-tile', onclick: () => openTileDialog(f, null) },
       h('span', { class: 'plus' }, '+'), h('span', null, 'Kasten hinzufügen')));
   }
+  const lost = [];
+  for (const fo of state.folders) for (const t of fo.tiles) if (t.audioId && !audioMeta.has(t.audioId)) lost.push({ fo, t });
+  if (lost.length) {
+    main.appendChild(h('div', { class: 'lostbar' }, h('b', null, lost.length + (lost.length === 1 ? ' Kasten hat' : ' Kästen haben') + ' seinen Ton verloren'),
+      ' (' + lost.slice(0, 6).map((x) => '„' + (x.t.name || 'Ohne Namen') + '“' + (x.fo.id !== f.id ? ' in ' + x.fo.name : '')).join(', ') + (lost.length > 6 ? ' …' : '') + '). ',
+      'Unter BEARBEITEN den Kasten antippen und den Ton neu auswählen – oder ein Paket öffnen, das diese Töne enthält.'));
+  }
   if (editMode && f.tiles.length) main.appendChild(h('p', { class: 'edithint' }, 'Kasten antippen = bearbeiten · Kasten gedrückt halten und ziehen = verschieben (auch auf einen anderen Ordner-Reiter)'));
   main.appendChild(grid);
   if (!f.tiles.length && !editMode) {
@@ -753,7 +813,7 @@ function tileEl(t) {
     t.hold ? h('span', { class: 'badge' }, 'Halten') : null);
   const stIc = h('div', { class: 'stateic' });
   el.append(prog, stIc, h('div', { class: 'thead' }, t.name || 'Ohne Namen'), badges,
-    h('div', { class: 'wwrap' }, meta ? cv : h('div', { class: 'nofile' }, 'kein Ton')),
+    h('div', { class: 'wwrap' }, meta ? cv : t.audioId ? h('div', { class: 'nofile lost' }, 'Ton fehlt', h('small', null, missingAudio.get(t.audioId) || '')) : h('div', { class: 'nofile' }, 'kein Ton')),
     h('div', { class: 'times' }, elp, rem));
   if (editMode) {
     el.append(h('div', { class: 'grip', html: ICONS.grip }), h('div', { class: 'pen', html: ICONS.pen }));
@@ -1180,18 +1240,24 @@ async function importFile(file, onProgress) {
     }
     ab = await file.arrayBuffer();
   }
-  // erst die Datei sichern (Blob kopiert die Daten), dann dekodieren – spart eine Kopie im Speicher
-  const blob = new Blob([ab], { type: type || 'application/octet-stream' });
-  const size = ab.byteLength;
+  // erst die Tondaten sichern (wird dabei kopiert), dann dekodieren – spart eine Kopie im Speicher
+  const id = uid(), size = ab.byteLength;
+  try { await idbPut('data', ab, id); }
+  catch (e) { throw new Error('Speichern fehlgeschlagen – ist der Speicher voll? (' + e.message + ')'); }
   let buf;
   try { buf = await decode(ab); }
-  catch (e) { throw new Error('„' + file.name + '“ konnte nicht gelesen werden. Bitte eine Audio- oder Videodatei (z. B. MP3, M4A, WAV, MOV, MP4) wählen.'); }
+  catch (e) {
+    idbDel('data', id).catch(() => {});
+    throw new Error('„' + file.name + '“ konnte nicht gelesen werden. Bitte eine Audio- oder Videodatei (z. B. MP3, M4A, WAV, MOV, MP4) wählen.');
+  }
   ab = null;
   const p = computePeaks(buf, 600);
-  const rec = { id: uid(), name: file.name || 'Ton', type, size, duration: buf.duration,
-    peaks: p.data, peakMax: p.max, added: Date.now(), blob };
+  const rec = { id, name: file.name || 'Ton', type, size, duration: buf.duration, peaks: p.data, peakMax: p.max, added: Date.now() };
   try { await idbPut('audio', rec); }
-  catch (e) { throw new Error('Speichern fehlgeschlagen – ist der Speicher voll? (' + e.message + ')'); }
+  catch (e) { idbDel('data', id).catch(() => {}); throw new Error('Speichern fehlgeschlagen – ist der Speicher voll? (' + e.message + ')'); }
+  // Kontrolle: Ist der Ton wirklich gespeichert?
+  const check = await idbGet('data', id).catch(() => null);
+  if (!check || check.byteLength !== size) throw new Error('Der Ton konnte nicht sicher gespeichert werden. Bitte nochmal versuchen.');
   audioMeta.set(rec.id, metaOf(rec));
   putBuf(rec.id, buf);
   return audioMeta.get(rec.id);
@@ -1679,6 +1745,8 @@ function openLibrary() {
 async function deleteAudio(id) {
   for (const v of [...voices.values()]) if (v.tile.audioId === id) v.stop();
   await idbDel('audio', id);
+  await idbDel('data', id);
+  missingAudio.delete(id);
   audioMeta.delete(id); bufCache.delete(id); hiPeakCache.delete(id);
   for (const f of state.folders) for (const t of f.tiles) if (t.audioId === id) { t.audioId = null; t.start = 0; t.end = null; }
   save();
@@ -1707,16 +1775,19 @@ async function exportBackup(folderIds) {
     const folders = folderIds ? state.folders.filter((f) => folderIds.includes(f.id)) : state.folders;
     const used = new Set();
     for (const f of folders) for (const t of f.tiles) if (t.audioId) used.add(t.audioId);
-    const recs = ((await idbAll('audio')) || []).filter((r) => used.has(r.id));
+    const recs = ((await idbAll('audio')) || []).filter((r) => used.has(r.id) && audioMeta.has(r.id));
     const header = { app: 'buehnenton', version: 1, created: new Date().toISOString(),
       state: { folders, settings: state.settings }, audio: [] };
     const parts = [];
     let offset = 0;
     for (const r of recs) {
+      const ab = await readAudioData(r.id);
+      if (!ab) continue;
+      const blob = new Blob([ab], { type: r.type || 'application/octet-stream' });
       header.audio.push({ id: r.id, name: r.name, type: r.type, duration: r.duration, peakMax: r.peakMax, added: r.added,
-        peaks: Array.from(r.peaks || [], (x) => Math.round(x * 1000) / 1000), offset, size: r.blob.size });
-      offset += r.blob.size;
-      parts.push(r.blob);
+        peaks: Array.from(r.peaks || [], (x) => Math.round(x * 1000) / 1000), offset, size: blob.size });
+      offset += blob.size;
+      parts.push(blob);
     }
     const hj = new TextEncoder().encode(JSON.stringify(header));
     const len = new Uint8Array(4);
@@ -1774,9 +1845,11 @@ async function importPackageFile(file) {
       b.set('Töne werden übernommen … ' + (++i) + ' von ' + header.audio.length);
       const ab = await file.slice(base + a.offset, base + a.offset + a.size).arrayBuffer();
       const rec = { id: a.id, name: a.name, type: a.type, size: a.size, duration: a.duration, peakMax: a.peakMax || 1,
-        peaks: Float32Array.from(a.peaks || []), added: a.added, blob: new Blob([ab], { type: a.type || 'application/octet-stream' }) };
+        peaks: Float32Array.from(a.peaks || []), added: a.added };
+      await idbPut('data', ab, rec.id);
       await idbPut('audio', rec);
       audioMeta.set(rec.id, metaOf(rec));
+      missingAudio.delete(rec.id);
       bufCache.delete(rec.id); hiPeakCache.delete(rec.id);
     }
     for (const f of folders) {
@@ -1786,6 +1859,7 @@ async function importPackageFile(file) {
     // leeren Standard-Ordner entfernen, wenn er nie benutzt wurde
     if (state.folders.length > 1) state.folders = state.folders.filter((f) => f.tiles.length || folders.some((x) => x.id === f.id) || f.name !== 'Vorstellung');
     if (folders[0]) state.activeFolder = folders[0].id;
+    dirty = true;
     await flushSave();
     b.done();
     document.querySelectorAll('.ov').forEach((o) => o.remove());

@@ -213,3 +213,7 @@ body.cue #toast { bottom: calc(110px + env(safe-area-inset-bottom)); }
 .welcome p { margin: 0 0 14px; font-size: 16px; color: #ddd; }
 .welcome p.small { font-size: 13px; color: var(--muted); margin: 12px 0 0; }
 .btn.big { font-size: 19px; padding: 15px 30px; font-weight: 600; }
+.tile .nofile.lost { flex-direction: column; color: #7a0000; font-weight: 700; opacity: 1; gap: 4px; }
+.tile .nofile.lost small { font-weight: 400; font-size: 11px; opacity: .8; word-break: break-all; padding: 0 6px; }
+.lostbar { background: #5c1a1a; color: #ffd6d6; border-radius: 10px; padding: 10px 14px; margin: 0 0 8px; font-size: 14px; line-height: 1.45; }
+.lostbar b { color: #fff; }
