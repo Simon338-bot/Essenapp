@@ -34,6 +34,9 @@ auch per Doppelklick) und kann alles bearbeiten. Kommt das Paket zurück, werden
 In Google Chrome oder Microsoft Edge öffnen und über „App installieren“ installieren. Bedienung mit der Maus wie am iPad.
 
 ## Bearbeiten
+- Neue Töne starten immer mit **genau 50 % Lautstärke**; beim Öffnen eines Pakets werden alle Kästen daraus auf 50 % gestellt.
+- Am Laptop: Tondateien oder Pakete einfach mit der Maus ins Fenster ziehen.
+- **Info-Knopf** oben (oder Taste I): verschiebbares Fenster mit allen Bedienhinweisen.
 - Ordner anlegen (**+ Ordner**), aktiven Reiter antippen = umbenennen, Kastengröße (klein/mittel/groß), Reihenfolge, löschen.
 - **+ Kasten** oder **Mehrere Töne** (legt für jede Datei einen Kasten an).
 - Kasten antippen: Name, Ton aus Dateien oder Fotos/Videos, Farbe, Lautstärke, Einblenden und Ausblenden (je 0–10 s),

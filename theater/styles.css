@@ -19,7 +19,7 @@ svg { width: 1em; height: 1em; fill: currentColor; flex: none; }
 /* ---------- Kopfzeile ---------- */
 #top { display: flex; flex-wrap: wrap; align-items: stretch; background: var(--bar); border-bottom: 1px solid #000;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); flex: none; }
-.tabs { flex: 1 1 320px; display: flex; overflow-x: auto; min-width: 0; scrollbar-width: none; }
+.tabs { flex: 1 1 150px; display: flex; overflow-x: auto; min-width: 0; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
 .tab { flex: 0 0 auto; min-width: 120px; max-width: 230px; padding: 8px 14px; background: transparent; border: 0;
   border-right: 1px solid #000; color: var(--muted); font-size: 17px; display: flex; align-items: center;
@@ -226,3 +226,44 @@ body.cue #toast { bottom: calc(110px + env(safe-area-inset-bottom)); }
 @media (hover: hover) and (pointer: fine) { #cuekeys { display: flex; } }
 @media (max-width: 640px) { .cue-undo span:last-child { display: none; } .cue-undo { padding: 0 10px; } }
 body.cue #toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
+/* Info-Knopf & verschiebbares Info-Fenster */
+.infobtn { display: flex; flex-direction: column; align-items: center; gap: 3px; border: 0; background: transparent; padding: 2px 4px; }
+.infobtn .ii { width: 34px; height: 34px; border-radius: 50%; border: 2px solid #8e8e93; color: #ddd; font: 700 18px/30px Georgia, serif; text-align: center; }
+.infobtn .cl { font-size: 11px; color: var(--muted); }
+.infobtn.on .ii { background: var(--blue); border-color: var(--blue); color: #fff; }
+#infopanel { position: fixed; z-index: 90; width: min(390px, calc(100vw - 16px)); max-height: min(70vh, 640px); display: flex; flex-direction: column;
+  background: rgba(36,36,38,.97); color: var(--text); border: 1px solid #555; border-radius: 14px; box-shadow: 0 14px 40px rgba(0,0,0,.6); overflow: hidden; }
+#infopanel.moving { opacity: .9; }
+#infopanel .ihead { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 10px; background: #3a3a3c; cursor: grab; touch-action: none; flex: none; }
+#infopanel.moving .ihead { cursor: grabbing; }
+#infopanel .igrip { color: #999; font-size: 18px; display: flex; }
+#infopanel .ititle { flex: 1; font-weight: 700; font-size: 15px; }
+#infopanel .ihb { border: 0; background: #48484a; color: #fff; width: 32px; height: 30px; border-radius: 8px; font-size: 18px; line-height: 1; }
+#infopanel .ibody { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 4px 12px 12px; font-size: 13.5px; line-height: 1.45; -webkit-user-select: text; user-select: text; }
+#infopanel details { border-bottom: 1px solid #444; padding: 6px 0; }
+#infopanel summary { font-weight: 700; font-size: 14.5px; cursor: pointer; padding: 4px 0; color: #fff; }
+#infopanel .isec ul { margin: 4px 0; padding-left: 18px; }
+#infopanel .isec li { margin: 3px 0; }
+#infopanel .isec p { margin: 6px 0; }
+#infopanel b { color: #fff; }
+#infopanel table.keys { border-collapse: collapse; width: 100%; margin: 6px 0; }
+#infopanel table.keys td { padding: 3px 4px; vertical-align: top; border-top: 1px solid #3a3a3c; }
+#infopanel table.keys td:first-child { white-space: nowrap; }
+#infopanel kbd { display: inline-block; background: #48484a; color: #fff; border-radius: 5px; padding: 0 6px; font: 600 12px/1.6 inherit; border-bottom: 2px solid #111; }
+@media (max-width: 640px) { .infobtn .cl { display: none; } .infobtn .ii { width: 30px; height: 30px; line-height: 26px; } }
+@media (max-width: 440px) {
+  .right { gap: 2px; padding: 4px 4px 6px; }
+  .mode button { padding: 7px 6px; font-size: 11px; }
+  .cbtn { min-width: 44px; }
+  .cbtn .ci { width: 38px; height: 38px; font-size: 17px; }
+  .cbtn .cl { font-size: 9.5px; }
+  .infobtn .ii { width: 28px; height: 28px; line-height: 24px; font-size: 16px; }
+}
+@media (max-width: 380px) {
+  .cbtn .cl, .infobtn .cl { display: none; }
+  .cbtn { min-width: 40px; }
+  .mode button { padding: 7px 5px; }
+}
+#drophint { position: fixed; inset: 0; z-index: 500; background: rgba(10,132,255,.25); border: 4px dashed var(--blue); display: flex; align-items: center; justify-content: center; pointer-events: none; }
+#drophint > div { background: #1c1c1e; color: #fff; padding: 22px 28px; border-radius: 16px; font-size: 24px; font-weight: 700; text-align: center; max-width: 80vw; }
+#drophint small { display: block; font-size: 14px; font-weight: 400; color: #bbb; margin-top: 8px; }

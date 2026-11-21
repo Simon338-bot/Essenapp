@@ -2,7 +2,7 @@
 /* Bühnenton – Töne fürs Theater.
    Alles läuft auf dem Gerät: Tondateien liegen in IndexedDB, die App selbst im Service-Worker-Cache. */
 
-const APP_VERSION = 9;
+const APP_VERSION = 11;
 
 /* ===================== Helfer ===================== */
 const $ = (s, el = document) => el.querySelector(s);
@@ -141,10 +141,11 @@ const audioMeta = new Map(); // id -> {id,name,type,size,duration,peaks,peakMax}
 const missingAudio = new Map(); // id -> Dateiname: Info vorhanden, Tondaten verloren
 let editMode = false;
 
+const NEW_VOLUME = 0.5; // neue Töne und Töne aus Paketen starten mit genau 50 % Lautstärke
 const newFolder = (name) => ({ id: uid(), name, size: 'M', tiles: [] });
 function newTile(folder) {
   const last = folder && folder.tiles[folder.tiles.length - 1];
-  return { id: uid(), name: '', audioId: null, color: last ? last.color : 'green', volume: 1, fadeIn: 0, fadeOut: 0,
+  return { id: uid(), name: '', audioId: null, color: last ? last.color : 'green', volume: NEW_VOLUME, fadeIn: 0, fadeOut: 0,
     start: 0, end: null, loop: false, solo: false, hold: false };
 }
 const activeFolder = () => state.folders.find((f) => f.id === state.activeFolder) || state.folders[0];
@@ -749,7 +750,8 @@ function renderTop() {
       ctrlBtn('pause', 'Pause', pauseAll, 'b-pause'),
       ctrlBtn('stop', 'Alle stoppen', stopAll, 'b-stop'),
       ctrlBtn('fade', 'Ausblenden ' + String(state.settings.fadeAll).replace('.', ',') + ' s', fadeAll, 'b-fade'));
-  top.append(tabs, h('div', { class: 'right' }, mode, ctr));
+  const info = h('button', { class: 'infobtn' + (infoPrefs().open ? ' on' : ''), title: 'Info – So geht’s (Taste I)', onclick: toggleInfo }, h('span', { class: 'ii' }, 'i'), h('span', { class: 'cl' }, 'Info'));
+  top.append(tabs, h('div', { class: 'right' }, info, mode, ctr));
   tabs.scrollLeft = sl;
   const act = $('.tab.active', tabs);
   if (act && !old) act.scrollIntoView({ inline: 'nearest', block: 'nearest' });
@@ -1094,7 +1096,9 @@ function rangeRow(label, { min, max, step, value, show, onInput }) {
   const r = h('input', { type: 'range', min, max, step });
   r.value = value;
   r.addEventListener('input', () => { const v = +r.value; out.textContent = show(v); onInput(v); });
-  return h('div', { class: 'prow' }, h('span', { class: 'rl' }, label), r, out);
+  const row = h('div', { class: 'prow' }, h('span', { class: 'rl' }, label), r, out);
+  row.setValue = (v) => { r.value = v; out.textContent = show(v); };
+  return row;
 }
 function seg(options, value, onChange) {
   const box = h('div', { class: 'seg' });
@@ -1298,9 +1302,11 @@ async function importFile(file, onProgress) {
   return audioMeta.get(rec.id);
 }
 async function bulkImport() {
-  const f = activeFolder();
   const files = await pickFiles(AUDIO_ACCEPT, true);
-  if (!files.length) return;
+  if (files.length) await importFilesToFolder(files);
+}
+async function importFilesToFolder(files) {
+  const f = activeFolder();
   const b = busy('Töne werden importiert …');
   let ok = 0;
   for (let i = 0; i < files.length; i++) {
@@ -1379,7 +1385,11 @@ function openTileDialog(folder, tile) {
     const files = await pickFiles(accept, false);
     if (!files.length) return;
     const b = busy('Ton wird importiert …');
-    try { const m = await importFile(files[0], (f) => b.set('Ton wird aus dem Video geholt … ' + Math.round(f * 100) + ' %')); setAudio(m.id); }
+    try {
+      const m = await importFile(files[0], (f) => b.set('Ton wird aus dem Video geholt … ' + Math.round(f * 100) + ' %'));
+      setAudio(m.id);
+      t.volume = NEW_VOLUME; volRow.setValue(Math.round(NEW_VOLUME * 100)); // neu importierter Ton: 50 %
+    }
     catch (e) { toast(e.message, 4500); }
     finally { b.done(); }
   };
@@ -1414,6 +1424,7 @@ function openTileDialog(folder, tile) {
   folderSel.addEventListener('change', () => { targetFolder = folderSel.value; });
 
   const edWrap = h('div', { class: 'editor' });
+  let volRow = null;
 
   body.append(
     nameIn,
@@ -1423,7 +1434,7 @@ function openTileDialog(folder, tile) {
       h('button', { class: 'btn', onclick: () => doImport(PHOTO_ACCEPT) }, 'Aus Fotos / Videos'),
       h('button', { class: 'btn', onclick: () => chooseImported(setAudio) }, 'Schon importiert …')),
     h('div', { class: 'prow' }, h('span', { class: 'rl' }, 'Farbe'), dots),
-    rangeRow('Lautstärke', { min: 0, max: 100, step: 1, value: Math.round(t.volume * 100), show: (v) => v + ' %',
+    volRow = rangeRow('Lautstärke', { min: 0, max: 100, step: 1, value: Math.round(t.volume * 100), show: (v) => v + ' %',
       onInput: (v) => { t.volume = v / 100; const p = voices.get('preview'); if (p) p.vol.gain.setTargetAtTime(volGain(t.volume), ctx.currentTime, 0.02); } }),
     rangeRow('Einblenden', { min: 0, max: 10, step: 0.1, value: t.fadeIn, show: secs, onInput: (v) => { t.fadeIn = v; } }),
     rangeRow('Ausblenden', { min: 0, max: 10, step: 0.1, value: t.fadeOut, show: secs, onInput: (v) => { t.fadeOut = v; } }),
@@ -1873,7 +1884,7 @@ async function importPackageFile(file) {
   const nt = folders.reduce((n, f) => n + f.tiles.length, 0);
   const same = folders.filter((f) => folderById(f.id)).map((f) => '„' + f.name + '“');
   if (!await confirmDlg('Paket vom ' + new Date(header.created).toLocaleString('de-DE') + ' öffnen? Es enthält ' + folders.length + ' Ordner (' + folders.map((f) => f.name).join(', ') + '), ' + nt + ' Kästen und ' + header.audio.length + ' Töne.'
-    + (same.length ? ' Diese Ordner gibt es schon und werden mit dem Stand aus dem Paket ersetzt: ' + same.join(', ') + '.' : '') + ' Alle anderen Ordner bleiben unverändert.', 'Öffnen')) return;
+    + (same.length ? ' Diese Ordner gibt es schon und werden mit dem Stand aus dem Paket ersetzt: ' + same.join(', ') + '.' : '') + ' Alle anderen Ordner bleiben unverändert. Die Lautstärke aller Kästen aus dem Paket wird auf 50 % gestellt.', 'Öffnen')) return;
   const b = busy('Paket wird geöffnet …');
   try {
     let i = 0;
@@ -1889,6 +1900,7 @@ async function importPackageFile(file) {
       bufCache.delete(rec.id); hiPeakCache.delete(rec.id);
     }
     for (const f of folders) {
+      for (const t of f.tiles || []) t.volume = NEW_VOLUME; // Töne aus Paketen: genau 50 %
       const i2 = state.folders.findIndex((x) => x.id === f.id);
       if (i2 >= 0) state.folders[i2] = f; else state.folders.push(f);
     }
@@ -1916,6 +1928,142 @@ async function updateWakeLock() {
   } catch (e) { /* nicht unterstützt */ }
 }
 
+/* ===================== Info-Fenster (verschiebbar) ===================== */
+const INFO_KEY = 'bt-info';
+function infoPrefs() {
+  // Beim ersten Start: am Laptop (Maus) offen, auf Tablet/Handy zu – dort verdeckt es sonst zu viel
+  const firstOpen = !!(window.matchMedia && matchMedia('(hover: hover) and (pointer: fine)').matches);
+  const def = { open: firstOpen, min: false, x: null, y: null };
+  try { return Object.assign(def, JSON.parse(localStorage.getItem(INFO_KEY) || '{}')); }
+  catch (e) { return def; }
+}
+function setInfoPrefs(p) { try { localStorage.setItem(INFO_KEY, JSON.stringify(p)); } catch (e) { /* egal */ } }
+function toggleInfo() {
+  const p = infoPrefs();
+  p.open = !$('#infopanel');
+  if (p.open) p.min = false;
+  setInfoPrefs(p);
+  renderInfo();
+}
+const kb = (k) => h('kbd', null, k);
+const krow = (keys, text) => h('tr', null, h('td', null, keys), h('td', null, text));
+function infoContent() {
+  const sec = (title, open, ...kids) => {
+    const d = h('details', null, h('summary', null, title), h('div', { class: 'isec' }, ...kids));
+    if (open) d.open = true;
+    return d;
+  };
+  return h('div', { class: 'ibody' },
+    sec('Spielen – Grundlagen', true,
+      h('ul', null,
+        h('li', null, h('b', null, 'Kasten antippen/anklicken'), ' = Ton startet.'),
+        h('li', null, h('b', null, 'Nochmal'), ' = Ton stoppt (mit seiner Ausblendzeit). Während er ausblendet nochmal = sofort aus.'),
+        h('li', null, 'Mehrere Töne können gleichzeitig laufen.'),
+        h('li', null, h('b', null, 'Pause'), ' hält alle an, nochmal = weiter. ', h('b', null, 'Alle stoppen'), ' = sofort Stille. ', h('b', null, 'Ausblenden'), ' = alle gemeinsam sanft leiser (Dauer in den Einstellungen).'),
+        h('li', null, 'Im Kasten: ▶ läuft · ⏸ pausiert · ◢ blendet aus. Grüner Punkt am Ordner-Reiter = dort läuft gerade etwas.'),
+        h('li', null, 'Ordner wechseln: oben auf den Reiter tippen.'))),
+    sec('Ein-Knopf-Modus (WEITER) & Tasten', true,
+      h('p', null, 'Einschalten: ', h('b', null, 'BEARBEITEN → Einstellungen → Ein-Knopf-Modus'), '. Dann gibt es unten den grünen ', h('b', null, 'WEITER'), '-Knopf. Jeder Druck spielt den nächsten Kasten (Reihenfolge wie im Ordner). Der Ton hört am Ende von selbst auf, es läuft nichts automatisch weiter. Der nächste Kasten ist grün umrandet.'),
+      h('table', { class: 'keys' },
+        krow([kb('Leertaste'), ' / ', kb('Enter')], 'nächster Ton (WEITER)'),
+        krow(kb('← Rücktaste'), 'Stopp & zurück: Ton stoppt sofort, WEITER spielt ihn nochmal (bei Versehen)'),
+        krow([kb('◀'), ' ', kb('▶')], 'nächsten Ton auswählen, ohne abzuspielen'),
+        krow(kb('Esc'), 'alles sofort stoppen'),
+        krow(kb('F'), 'alles ausblenden'),
+        krow(kb('P'), 'Pause / weiter'),
+        krow(kb('I'), 'dieses Info-Fenster ein/aus')),
+      h('p', null, 'Präsentations-Fernbedienung: „Weiter“ = nächster Ton, „Zurück“ = Stopp & zurück. „Von vorn“ startet wieder bei Kasten 1. Doppeldruck innerhalb ½ Sekunde zählt nur einmal.')),
+    sec('Bearbeiten', false,
+      h('ul', null,
+        h('li', null, 'Oben auf ', h('b', null, 'BEARBEITEN'), ' umschalten.'),
+        h('li', null, h('b', null, '+ Kasten'), ' = neuer Kasten · ', h('b', null, 'Mehrere Töne'), ' = für jede gewählte Datei ein Kasten. Am Laptop: Dateien einfach mit der Maus ins Fenster ziehen.'),
+        h('li', null, 'Neue Töne starten immer mit ', h('b', null, '50 % Lautstärke'), ' (im Kasten änderbar).'),
+        h('li', null, h('b', null, 'Kasten antippen'), ' = Name, Ton (aus Dateien oder Fotos/Videos), Farbe, Lautstärke, Ein-/Ausblenden (bis 10 s), Endlosschleife, Solo, Nur solange gedrückt.'),
+        h('li', null, h('b', null, 'Schneiden'), ': grüne Linie = Start, rote Linie = Ende verschieben. „Näher ran“ zum genauen Schneiden, ◀ ▶ für Feinschritte, ▶ zum Reinhören.'),
+        h('li', null, h('b', null, 'Verschieben'), ': iPad – Kasten kurz gedrückt halten und ziehen. Laptop – mit gedrückter Maustaste ziehen. Auf einen Ordner-Reiter ziehen = in diesen Ordner.'),
+        h('li', null, h('b', null, '+ Ordner'), ' = neuer Ordner. Aktiven Reiter antippen = umbenennen, Kastengröße, Reihenfolge, löschen.'))),
+    sec('Teilen & Sichern', false,
+      h('ul', null,
+        h('li', null, h('b', null, 'BEARBEITEN → Einstellungen → Paket verschicken / sichern'), ': Ordner wählen → Teilen (WhatsApp, Mail, AirDrop) oder Herunterladen.'),
+        h('li', null, 'Empfänger: Bühnenton öffnen → ', h('b', null, 'Paket öffnen'), ' → Datei wählen. Am Laptop auch Datei ins Fenster ziehen oder (installiert) Doppelklick. Alle Kästen aus dem Paket stehen dann auf 50 % Lautstärke.'),
+        h('li', null, 'Schickt jemand das Paket zurück, werden gleiche Ordner auf seinen Stand gebracht.'),
+        h('li', null, 'Regelmäßig ein Paket als Sicherung herunterladen.'))),
+    sec('Wenn etwas nicht klappt', false,
+      h('ul', null,
+        h('li', null, 'Kein Ton nach einem App-Wechsel: einfach nochmal antippen.'),
+        h('li', null, h('b', null, '„Ton fehlt“'), ' im Kasten: unter BEARBEITEN den Kasten antippen und den Ton neu auswählen.'),
+        h('li', null, h('b', null, 'Neue Version holen'), ': App schließen und neu öffnen (ggf. zweimal). Version steht unten in den Einstellungen.'),
+        h('li', null, 'App nur in einem Fenster/Tab gleichzeitig offen haben.'))),
+    sec('Tipps für die Vorstellung', false,
+      h('ul', null,
+        h('li', null, 'iPad: „Nicht stören“ an, App während des Stücks nicht verlassen.'),
+        h('li', null, 'Laptop: am Netzteil, Energiesparen/Bildschirmschoner aus, Lautstärke vorher prüfen.'),
+        h('li', null, 'Vorher einmal alle Töne durchhören.'),
+        h('li', null, 'Kein Internet nötig – alles liegt auf dem Gerät.'))));
+}
+function renderInfo() {
+  const old = $('#infopanel');
+  if (old) old.remove();
+  const p = infoPrefs();
+  $$top('.infobtn').forEach((b) => b.classList.toggle('on', p.open));
+  if (!p.open) return;
+  const minBtn = h('button', { class: 'ihb', title: p.min ? 'Aufklappen' : 'Verkleinern', onclick: () => { const q = infoPrefs(); q.min = !q.min; setInfoPrefs(q); renderInfo(); } }, p.min ? '▢' : '–');
+  const closeBtn = h('button', { class: 'ihb', title: 'Schließen (Taste I)', onclick: toggleInfo }, '×');
+  const head = h('div', { class: 'ihead' }, h('span', { class: 'igrip', html: ICONS.grip }), h('span', { class: 'ititle' }, 'Info – So geht’s'), minBtn, closeBtn);
+  const panel = h('div', { id: 'infopanel', class: p.min ? 'min' : '' }, head, p.min ? null : infoContent());
+  document.body.appendChild(panel);
+  // Startposition: oben rechts unter der Kopfzeile
+  const place = (x, y) => {
+    const w = panel.offsetWidth, hh = panel.offsetHeight;
+    x = clamp(x, 4, Math.max(4, window.innerWidth - w - 4));
+    y = clamp(y, 4, Math.max(4, window.innerHeight - Math.min(hh, 60) - 4));
+    panel.style.left = x + 'px'; panel.style.top = y + 'px';
+    return [x, y];
+  };
+  const topH = ($('#top') || { offsetHeight: 70 }).offsetHeight;
+  place(p.x != null ? p.x : window.innerWidth - panel.offsetWidth - 12, p.y != null ? p.y : topH + 8);
+  // Verschieben am Kopf (Maus und Finger)
+  head.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) return;
+    e.preventDefault();
+    const r = panel.getBoundingClientRect(), ox = e.clientX - r.left, oy = e.clientY - r.top;
+    try { head.setPointerCapture(e.pointerId); } catch (err) { /* egal */ }
+    panel.classList.add('moving');
+    const mv = (ev) => { place(ev.clientX - ox, ev.clientY - oy); };
+    const up = () => {
+      head.removeEventListener('pointermove', mv); head.removeEventListener('pointerup', up); head.removeEventListener('pointercancel', up);
+      panel.classList.remove('moving');
+      const q = infoPrefs(); q.x = parseFloat(panel.style.left); q.y = parseFloat(panel.style.top); setInfoPrefs(q);
+    };
+    head.addEventListener('pointermove', mv); head.addEventListener('pointerup', up); head.addEventListener('pointercancel', up);
+  });
+}
+const $$top = (sel) => [...document.querySelectorAll(sel)];
+window.addEventListener('resize', () => { if ($('#infopanel')) renderInfo(); });
+
+/* ===================== Dateien ins Fenster ziehen (Laptop) ===================== */
+function setupDrop() {
+  let depth = 0, hint = null;
+  const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+  const show = (on) => {
+    if (on && !hint) { hint = h('div', { id: 'drophint' }, h('div', null, 'Hier loslassen', h('small', null, 'Töne/Videos → neue Kästen im Ordner „' + activeFolder().name + '“ (50 % Lautstärke) · .buehnenton-Paket → öffnen'))); document.body.appendChild(hint); }
+    if (!on && hint) { hint.remove(); hint = null; }
+  };
+  window.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; show(true); });
+  window.addEventListener('dragover', (e) => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  window.addEventListener('dragleave', (e) => { if (!hasFiles(e)) return; depth = Math.max(0, depth - 1); if (!depth) show(false); });
+  window.addEventListener('drop', async (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); depth = 0; show(false);
+    if (document.querySelector('.ov, .busy')) { toast('Bitte erst das offene Fenster schließen.'); return; }
+    const files = [...e.dataTransfer.files];
+    const pkgs = files.filter((f) => /\.buehnenton$/i.test(f.name));
+    const sounds = files.filter((f) => !/\.buehnenton$/i.test(f.name));
+    for (const f of pkgs) await importPackageFile(f);
+    if (sounds.length) await importFilesToFolder(sounds);
+  });
+}
+
 /* ===================== Start ===================== */
 async function main() {
   try { await load(); }
@@ -1924,6 +2072,8 @@ async function main() {
     return;
   }
   render();
+  renderInfo();
+  setupDrop();
   preloadFolder(activeFolder());
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -1953,7 +2103,9 @@ async function main() {
   // Tastatur (Windows, iPad-Tastatur, Präsentations-Fernbedienung)
   const typing = (e) => e.target && e.target.closest && e.target.closest('input,textarea,select');
   document.addEventListener('keydown', (e) => {
-    if (typing(e) || document.querySelector('.ov, .busy') || editMode || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (typing(e) || document.querySelector('.ov, .busy') || e.ctrlKey || e.metaKey || e.altKey) return;
+    if ((e.key === 'i' || e.key === 'I') && !e.repeat) { e.preventDefault(); toggleInfo(); return; }
+    if (editMode) return;
     const k = e.key;
     let done = true;
     const cue = state.settings.cueMode;
