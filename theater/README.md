@@ -18,8 +18,12 @@ Töne und Musik fürs Theater: Kästen antippen, abspielen, gemeinsam ausblenden
 ## Ein-Knopf-Modus
 Einstellungen → „Ein-Knopf-Modus“: Im Spielmodus erscheint unten ein großer **WEITER**-Knopf. Jeder Druck spielt den
 nächsten Kasten des Ordners (1, 2, 3 …). Pfeile = zurück/überspringen, „Von vorn“ = wieder bei 1.
-Tastatur/Fernbedienung: Leertaste, Enter, Pfeil rechts, Bild runter = WEITER · Pfeil links = zurück · Esc = alle stoppen ·
-F = alle ausblenden · P = Pause.
+Jeder Ton spielt bis zu seinem Ende und hört dann auf – der nächste kommt erst beim nächsten Druck.
+**Stopp & zurück** (roter Knopf / Rücktaste): aus Versehen gedrückt? Der Ton stoppt sofort, WEITER spielt ihn nochmal.
+Schutz vor Doppeldruck: ein zweiter Druck innerhalb einer halben Sekunde zählt nicht (abschaltbar).
+Tastatur: Leertaste/Enter = nächster Ton · Rücktaste = Stopp & zurück · Pfeil links/rechts = Ton auswählen ·
+Esc = alles stoppen · F = alles ausblenden · P = Pause. Präsentations-Fernbedienung: Weiter = nächster Ton,
+Zurück = Stopp & zurück.
 
 ## Pakete teilen
 Einstellungen → „Paket verschicken / sichern“: gewählte Ordner samt Tönen als eine `.buehnenton`-Datei

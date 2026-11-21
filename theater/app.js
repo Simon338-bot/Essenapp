@@ -2,7 +2,7 @@
 /* Bühnenton – Töne fürs Theater.
    Alles läuft auf dem Gerät: Tondateien liegen in IndexedDB, die App selbst im Service-Worker-Cache. */
 
-const APP_VERSION = 8;
+const APP_VERSION = 9;
 
 /* ===================== Helfer ===================== */
 const $ = (s, el = document) => el.querySelector(s);
@@ -135,7 +135,7 @@ async function readAudioData(id) {
 }
 
 /* ===================== Zustand ===================== */
-const defaultSettings = () => ({ fadeAll: 3, instant: false, keepAwake: true, cueMode: false, cueFadePrev: false });
+const defaultSettings = () => ({ fadeAll: 3, instant: false, keepAwake: true, cueMode: false, cueFadePrev: false, cueGuard: true });
 let state = { folders: [], activeFolder: null, settings: defaultSettings() };
 const audioMeta = new Map(); // id -> {id,name,type,size,duration,peaks,peakMax}
 const missingAudio = new Map(); // id -> Dateiname: Info vorhanden, Tondaten verloren
@@ -572,7 +572,13 @@ function stopAll() {
 /* ---------- Ein-Knopf-Modus: WEITER spielt die Kästen des Ordners der Reihe nach ---------- */
 const cuePos = new Map(); // Ordner-ID -> Index des nächsten Kastens
 const cueIndex = (f) => clamp(cuePos.get(f.id) || 0, 0, f.tiles.length);
+let lastCue = null;   // zuletzt mit WEITER gestarteter Kasten {folderId, index, tileId}
+let lastGoAt = 0;
 function cueGo() {
+  // Schutz vor Doppeldruck: ein zweiter Druck innerhalb einer halben Sekunde zählt nicht
+  const now = performance.now();
+  if (state.settings.cueGuard && now - lastGoAt < 500) return;
+  lastGoAt = now;
   const f = activeFolder();
   let i = cueIndex(f);
   while (i < f.tiles.length && !audioMeta.has(f.tiles[i].audioId)) i++; // Kästen ohne Ton überspringen
@@ -586,7 +592,24 @@ function cueGo() {
   if (old) old.stop();
   startTile(tile);
   cuePos.set(f.id, i + 1);
+  lastCue = { folderId: f.id, index: i, tileId: tile.id };
   updateCue();
+}
+/* Aus Versehen gedrückt? Zuletzt gestarteten Ton sofort stoppen und WEITER wieder auf ihn stellen */
+function cueUndo() {
+  const f = activeFolder();
+  if (!lastCue || lastCue.folderId !== f.id) { cueStep(-1); return; }
+  const t = f.tiles[lastCue.index];
+  const v = voices.get(lastCue.tileId);
+  if (v) v.stop();
+  pending.delete(lastCue.tileId);
+  startGen++; // falls der Ton gerade noch lädt
+  cuePos.set(f.id, lastCue.index);
+  lastCue = null;
+  lastGoAt = 0;
+  updateCue();
+  changed();
+  toast('„' + (t ? t.name || 'Ohne Namen' : 'Ton') + '“ gestoppt – WEITER spielt ihn nochmal.');
 }
 function cueStep(d) {
   const f = activeFolder();
@@ -608,14 +631,26 @@ function updateCue() {
 function renderCueBar() {
   const old = $('#cuebar');
   if (old) old.remove();
+  const oldKeys = $('#cuekeys');
+  if (oldKeys) oldKeys.remove();
   document.body.classList.toggle('cue', !editMode && !!state.settings.cueMode);
   if (editMode || !state.settings.cueMode) return;
   const bar = h('div', { id: 'cuebar' },
-    h('button', { class: 'cue-nav', title: 'Zurück (Pfeil links)', html: ICONS.left, onclick: () => cueStep(-1) }),
+    h('button', { class: 'cue-nav', title: 'Vorherigen Ton auswählen (Pfeil links)', html: ICONS.left, onclick: () => cueStep(-1) }),
     h('button', { class: 'cue-go', title: 'Nächster Ton (Leertaste)', onclick: cueGo },
       h('span', { class: 'cue-ic', html: ICONS.play }), h('span', { class: 'cue-lbl' }, 'WEITER'), h('span', { class: 'cue-what' })),
-    h('button', { class: 'cue-nav', title: 'Überspringen (Pfeil rechts)', html: ICONS.right, onclick: () => cueStep(1) }),
-    h('button', { class: 'cue-reset', onclick: () => { cuePos.set(activeFolder().id, 0); updateCue(); } }, 'Von vorn'));
+    h('button', { class: 'cue-nav', title: 'Ton überspringen (Pfeil rechts)', html: ICONS.right, onclick: () => cueStep(1) }),
+    h('button', { class: 'cue-undo', title: 'Aus Versehen gedrückt? Ton stoppen und nochmal bereitstellen (Rücktaste)', onclick: cueUndo },
+      h('span', { class: 'cue-undo-ic' }, '↶'), h('span', null, 'Stopp & zurück')),
+    h('button', { class: 'cue-reset', onclick: () => { cuePos.set(activeFolder().id, 0); lastCue = null; updateCue(); } }, 'Von vorn'));
+  const keys = h('div', { id: 'cuekeys' },
+    h('span', null, h('kbd', null, 'Leertaste'), ' nächster Ton'),
+    h('span', null, h('kbd', null, '← Rücktaste'), ' Stopp & zurück'),
+    h('span', null, h('kbd', null, 'Esc'), ' alles stoppen'),
+    h('span', null, h('kbd', null, 'F'), ' alles ausblenden'),
+    h('span', null, h('kbd', null, 'P'), ' Pause'),
+    h('span', null, h('kbd', null, '◀'), h('kbd', null, '▶'), ' Ton auswählen'));
+  document.body.appendChild(keys);
   document.body.appendChild(bar);
   updateCue();
 }
@@ -1688,7 +1723,8 @@ function openSettings() {
     h('div', { class: 'section' }, h('h3', null, 'Ein-Knopf-Modus'),
       switchRow('Ein-Knopf-Modus (WEITER-Knopf)', s.cueMode, (v) => { s.cueMode = v; save(); }, 'Im Spielmodus erscheint unten ein großer WEITER-Knopf: 1× drücken = Kasten 1, nochmal = Kasten 2, nochmal = Kasten 3 … (Reihenfolge wie im Ordner). Kästen antippen geht weiterhin.'),
       switchRow('Vorherigen Ton dabei ausblenden', s.cueFadePrev, (v) => { s.cueFadePrev = v; save(); }, 'Beim Drücken auf WEITER werden die gerade laufenden Töne ausgeblendet.'),
-      h('p', { class: 'hint' }, 'Mit Tastatur (Windows/iPad-Tastatur) oder Präsentations-Fernbedienung: Leertaste/Enter/Pfeil rechts = WEITER, Pfeil links = zurück, Esc = alle stoppen, F = alle ausblenden, P = Pause.')),
+      switchRow('Schutz vor Doppeldruck', s.cueGuard, (v) => { s.cueGuard = v; save(); }, 'Wird WEITER zweimal innerhalb einer halben Sekunde gedrückt, zählt nur der erste Druck.'),
+      h('p', { class: 'hint' }, 'Tastatur (Laptop/iPad-Tastatur): Leertaste oder Enter = nächster Ton · Rücktaste (←) = Stopp & zurück (aus Versehen gedrückt: Ton stoppt sofort, Leertaste spielt ihn nochmal) · Pfeil links/rechts = Ton auswählen ohne abzuspielen · Esc = alles stoppen · F = alles ausblenden · P = Pause. Präsentations-Fernbedienung: „Weiter“ = nächster Ton, „Zurück“ = Stopp & zurück.')),
     h('div', { class: 'section' }, h('h3', null, 'Tondateien'), libBtn, storageL),
     h('div', { class: 'section' }, h('h3', null, 'Teilen & Sichern'),
       h('p', { class: 'hint' }, 'Ein Paket enthält Ordner, Kästen und Töne in einer Datei. Schick es per WhatsApp, Mail, AirDrop, USB-Stick … an jemand anderen (iPad oder Windows). Er öffnet Bühnenton, tippt hier auf „Paket öffnen“ und hat alles – und kann es auch bearbeiten. Schickt er dir das Paket zurück, werden deine Ordner damit aktualisiert. Auch gut als Sicherung.'),
@@ -1920,8 +1956,11 @@ async function main() {
     if (typing(e) || document.querySelector('.ov, .busy') || editMode || e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key;
     let done = true;
-    if (k === ' ' || k === 'Enter' || k === 'ArrowRight' || k === 'PageDown' || k === 'ArrowDown') { if (state.settings.cueMode) { if (!e.repeat) cueGo(); } else done = false; }
-    else if (k === 'ArrowLeft' || k === 'PageUp' || k === 'ArrowUp') { if (state.settings.cueMode) cueStep(-1); else done = false; }
+    const cue = state.settings.cueMode;
+    if (cue && (k === ' ' || k === 'Enter' || k === 'PageDown')) { if (!e.repeat) cueGo(); }
+    else if (cue && (k === 'Backspace' || k === 'PageUp')) { if (!e.repeat) cueUndo(); }
+    else if (cue && k === 'ArrowRight') cueStep(1);
+    else if (cue && k === 'ArrowLeft') cueStep(-1);
     else if (k === 'Escape') stopAll();
     else if (k === 'f' || k === 'F') fadeAll();
     else if (k === 'p' || k === 'P') pauseAll();

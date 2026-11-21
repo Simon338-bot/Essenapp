@@ -217,3 +217,12 @@ body.cue #toast { bottom: calc(110px + env(safe-area-inset-bottom)); }
 .tile .nofile.lost small { font-weight: 400; font-size: 11px; opacity: .8; word-break: break-all; padding: 0 6px; }
 .lostbar { background: #5c1a1a; color: #ffd6d6; border-radius: 10px; padding: 10px 14px; margin: 0 0 8px; font-size: 14px; line-height: 1.45; }
 .lostbar b { color: #fff; }
+/* Stopp & zurück + Tastenübersicht */
+.cue-undo { background: #8e2b2b !important; padding: 0 14px; font-size: 14px; font-weight: 600; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; line-height: 1.1; }
+.cue-undo-ic { font-size: 22px; }
+.cue-undo:active { filter: brightness(1.2); }
+#cuekeys { flex: none; display: none; flex-wrap: wrap; justify-content: center; gap: 6px 18px; padding: 6px 12px 0; background: var(--bar); color: var(--muted); font-size: 12.5px; border-top: 1px solid #000; }
+#cuekeys kbd { display: inline-block; background: #3a3a3c; color: #fff; border-radius: 5px; padding: 1px 6px; font: 600 12px/1.5 inherit; border-bottom: 2px solid #111; margin-right: 2px; }
+@media (hover: hover) and (pointer: fine) { #cuekeys { display: flex; } }
+@media (max-width: 640px) { .cue-undo span:last-child { display: none; } .cue-undo { padding: 0 10px; } }
+body.cue #toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
